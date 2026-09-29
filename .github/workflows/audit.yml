@@ -46,3 +46,5 @@ jobs:
         run: |
           bash -n deploy_audited_stack.sh
           bash -n audit_vps.sh
+          bash -n prepare_control_network.sh
+          bash -n deploy_bridge_core.sh
