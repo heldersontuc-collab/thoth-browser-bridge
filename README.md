@@ -23,7 +23,7 @@ thoth-browser-bridge (repo publico)
    v
 Bridge na VPS
    |
-   | rede Docker privada
+   | rede Docker control_api isolada
    v
 THOTH Browser API -> Chromium persistente
    |
@@ -70,3 +70,9 @@ O navegador humano deve ficar em uma porta Tailscale Serve privada separada do F
 Um chat autorizado pode ler este README, buscar a chave publica no endpoint definido em `bridge.json`, criar um envelope conforme `PROTOCOL.md`, gravar a tarefa em `queue.json`, aguardar o resultado e descriptografa-lo com a chave de resposta que ele proprio gerou.
 
 **Nunca grave cookies, senhas, tokens, chaves privadas ou resultados em texto puro neste repositorio.**
+
+
+## Dependencia de seguranca
+
+A versao atual do Bridge exige **THOTH Browser Node V1.2.2 AUDITED** ou superior.
+Ela usa a rede Docker isolada `thoth-browser-node_control_api`; o Bridge nao entra na rede do Chromium/CDP.
