@@ -25,9 +25,10 @@ jobs:
         run: python -m compileall -q bridge.py bridge_crypto.py bridge_mcp_client.py tests
       - name: Unit tests
         env:
+          PYTHONPATH: .
           THOTH_API_KEY: audit-test-key
           BRIDGE_DATA_DIR: /tmp/thoth-bridge-audit
-        run: pytest -q
+        run: python -m pytest -q
       - name: Compose config
         env:
           THOTH_API_KEY: audit-test-key
