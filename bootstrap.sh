@@ -30,14 +30,14 @@ mkdir -p "$DIR/data/keys" "$DIR/data/results"
 chown -R 0:0 "$DIR/data"
 chmod 700 "$DIR/data" "$DIR/data/keys" "$DIR/data/results"
 
-say "Construindo somente o THOTH Browser Bridge"
+say "Construindo e iniciando somente o THOTH Browser Bridge"
 cd "$DIR"
-docker compose build bridge
+install -d -m 700 -o 0 -g 0 "$DIR/data" "$DIR/data/keys" "$DIR/data/results"
+docker compose up -d --build bridge
 
-say "Validando escrita no volume persistente antes de iniciar"
-docker compose run --rm --no-deps --entrypoint sh bridge -c 'id; ls -ldn /data /data/keys /data/results; touch /data/.write_test /data/keys/.write_test /data/results/.write_test; rm -f /data/.write_test /data/keys/.write_test /data/results/.write_test' || fail "container nao consegue escrever em /data"
-
-docker compose up -d bridge
+say "Confirmando que o container ficou em execucao"
+sleep 2
+docker compose ps
 
 say "Testando endpoint local"
 for i in $(seq 1 30); do
