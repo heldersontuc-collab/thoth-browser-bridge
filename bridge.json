@@ -1,7 +1,7 @@
 {
   "version": 1,
   "queue_raw_url": "https://raw.githubusercontent.com/heldersontuc-collab/thoth-browser-bridge/main/queue.json",
-  "public_endpoint": "https://thoth-browser-vps.tail819f67.ts.net",
+  "public_endpoint": "https://thoth-browser-vps.tail819f67.ts.net/thoth-bridge",
   "private_browser": "https://thoth-browser-vps.tail819f67.ts.net:8443/",
   "crypto": "X25519+HKDF-SHA256+AES-256-GCM"
 }
