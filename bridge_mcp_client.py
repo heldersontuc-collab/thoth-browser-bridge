@@ -29,7 +29,8 @@ async def ensure_session(session_id: str | None = None) -> str:
 
 async def call_tool(action: str, args: dict[str, Any]) -> Any:
     if action == "health":
-        return {"ok": True, "bridge": "online"}
+        node = await api("GET", "/v1/sessions")
+        return {"ok": True, "browser_api": "authenticated", "node": node}
     if action == "sessions":
         return await api("GET", "/v1/sessions")
     if action == "open":
