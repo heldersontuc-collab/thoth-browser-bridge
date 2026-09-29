@@ -26,6 +26,16 @@ docker compose version >/dev/null 2>&1 || fail "docker compose indisponivel"
 [ -f "$NODE_DIR/.env" ] || fail ".env do Browser Node nao encontrado"
 [ -d "$BRIDGE_DIR/.git" ] || fail "Bridge Git nao encontrado"
 
+say "0/9 - PRE-FLIGHT RECURSOS"
+FREE_KB="$(df -Pk / | awk 'NR==2{print $4}')"
+MEM_AVAIL_KB="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)"
+MEM_AVAIL_MB=$(( MEM_AVAIL_KB / 1024 ))
+echo "Espaco livre: $((FREE_KB/1024/1024)) GB"
+echo "Memoria disponivel: $MEM_AVAIL_MB MB"
+[ "$FREE_KB" -ge 5242880 ] || fail "menos de 5 GB livres; deploy abortado sem alterar nada"
+[ "$MEM_AVAIL_MB" -ge 700 ] || fail "menos de 700 MB de memoria disponivel; deploy abortado sem alterar nada"
+echo "PRECHECK_RESOURCES_OK"
+
 rollback_node(){
   if [ "$NODE_DEPLOYED" = true ] && [ -d "$BACKUP/node_files" ]; then
     echo
