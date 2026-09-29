@@ -1,8 +1,24 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+
+_NAV_BLOCK = re.compile(
+    r"(?:^|[/_?&=.-])(checkout|pay|payment|purchase|buy|order|transfer|pix|bet|wager|"
+    r"delete|remove|unsubscribe|cancel|submit|save)(?:$|[/_?&=.-])",
+    re.I,
+)
+
+def _safe_navigation_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("bridge navigation allows only explicit http/https URLs")
+    target = f"{parsed.path}?{parsed.query}"
+    if _NAV_BLOCK.search(target):
+        raise ValueError("bridge v1 blocks navigation to URLs that look like payment, transfer, purchase or destructive actions")
+    return url
 
 import httpx
 
@@ -45,7 +61,7 @@ async def call_tool(action: str, args: dict[str, Any]) -> Any:
     if action == "state":
         return await api("GET", f"/v1/sessions/{sid}")
     if action == "navigate":
-        return await api("POST", f"/v1/sessions/{sid}/navigate", {"url": args["url"]})
+        return await api("POST", f"/v1/sessions/{sid}/navigate", {"url": _safe_navigation_url(str(args["url"]))})
     if action == "inspect":
         raise ValueError("bridge v1 blocks DOM form inspection until Browser Node V1.2.2 redaction is deployed")
     if action == "extract":
@@ -60,7 +76,7 @@ async def call_tool(action: str, args: dict[str, Any]) -> Any:
     if action == "tabs":
         return await api("GET", f"/v1/sessions/{sid}/tabs")
     if action == "new_tab":
-        return await api("POST", f"/v1/sessions/{sid}/tabs/new", {"url": args.get("url")})
+        return await api("POST", f"/v1/sessions/{sid}/tabs/new", {"url": _safe_navigation_url(str(args["url"])) if args.get("url") else None})
     if action == "switch_tab":
         return await api("POST", f"/v1/sessions/{sid}/tabs/switch", {"index": int(args["index"])})
     if action == "close_tab":
