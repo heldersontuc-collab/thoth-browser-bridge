@@ -29,7 +29,7 @@ THOTH Browser API -> Chromium persistente
    |
    | resposta cifrada
    v
-Tailscale Funnel :10000
+Tailscale Funnel HTTPS 443, somente em /thoth-bridge
    |
    v
 ChatGPT
@@ -60,10 +60,10 @@ O bootstrap:
 - nao reinicia Nginx, Docker ou a VPS;
 - usa a rede Docker ja existente do THOTH Browser;
 - publica somente a porta local 8800 em `127.0.0.1`;
-- tenta habilitar Tailscale Funnel na porta publica TLS 10000;
+- nao altera Tailscale; a publicacao e configurada separadamente depois da auditoria;
 - preserva `/opt/thoth-browser-bridge/data` em atualizacoes.
 
-Se o Tailscale pedir aprovacao do Funnel, o script mostra o link. Autorize e execute o bootstrap novamente.
+O navegador humano deve ficar em uma porta Tailscale Serve privada separada do Funnel publico do Bridge.
 
 ## Para outros chats
 
