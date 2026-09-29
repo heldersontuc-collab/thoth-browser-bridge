@@ -33,6 +33,11 @@ jobs:
         env:
           THOTH_API_KEY: audit-test-key
         run: docker compose config >/dev/null
+      - name: Bootstrap project isolation
+        run: |
+          grep -q 'COMPOSE_PROJECT_NAME=thoth-browser-bridge' bootstrap.sh
+          ! grep -q -- '--env-file "$NODE_DIR/.env"' bootstrap.sh
+          grep -q 'thoth-browser-node_control_api' bootstrap.sh
 
   patch-integrity:
     runs-on: ubuntu-latest
