@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+from urllib.parse import quote
+
+import httpx
+
+API_URL = os.getenv("THOTH_API_URL", "http://api:8080").rstrip("/")
+API_KEY = os.environ["THOTH_API_KEY"]
+DEFAULT_PROFILE = os.getenv("BRIDGE_PROFILE", "sorteios")
+
+async def api(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        r = await client.request(
+            method,
+            f"{API_URL}{path}",
+            headers={"X-THOTH-Key": API_KEY},
+            json=body,
+        )
+        r.raise_for_status()
+        return r.json()
+
+async def ensure_session(session_id: str | None = None) -> str:
+    if session_id:
+        return session_id
+    opened = await api("POST", "/v1/sessions/open", {"profile": DEFAULT_PROFILE, "start_url": None})
+    return opened["session_id"]
+
+async def call_tool(action: str, args: dict[str, Any]) -> Any:
+    if action == "health":
+        return {"ok": True, "bridge": "online"}
+    if action == "sessions":
+        return await api("GET", "/v1/sessions")
+    if action == "open":
+        return await api(
+            "POST",
+            "/v1/sessions/open",
+            {"profile": args.get("profile", DEFAULT_PROFILE), "start_url": args.get("start_url")},
+        )
+
+    sid = await ensure_session(args.get("session_id"))
+
+    if action == "state":
+        return await api("GET", f"/v1/sessions/{sid}")
+    if action == "navigate":
+        return await api("POST", f"/v1/sessions/{sid}/navigate", {"url": args["url"]})
+    if action == "inspect":
+        return await api("GET", f"/v1/sessions/{sid}/inspect")
+    if action == "extract":
+        mode = quote(str(args.get("mode", "text")))
+        return await api("GET", f"/v1/sessions/{sid}/extract?mode={mode}")
+    if action == "wait":
+        return await api("POST", f"/v1/sessions/{sid}/wait", {"milliseconds": int(args.get("milliseconds", 1000))})
+    if action == "screenshot":
+        return await api(
+            "POST",
+            f"/v1/sessions/{sid}/screenshot",
+            {
+                "full_page": bool(args.get("full_page", True)),
+                "name": args.get("name"),
+                "include_base64": bool(args.get("include_base64", True)),
+            },
+        )
+    if action == "tabs":
+        return await api("GET", f"/v1/sessions/{sid}/tabs")
+    if action == "new_tab":
+        return await api("POST", f"/v1/sessions/{sid}/tabs/new", {"url": args.get("url")})
+    if action == "switch_tab":
+        return await api("POST", f"/v1/sessions/{sid}/tabs/switch", {"index": int(args["index"])})
+    if action == "close_tab":
+        return await api("POST", f"/v1/sessions/{sid}/tabs/close", {"index": int(args["index"])})
+    if action == "events":
+        limit = max(1, min(int(args.get("limit", 100)), 500))
+        return await api("GET", f"/v1/events?limit={limit}")
+    if action == "close":
+        return await api("DELETE", f"/v1/sessions/{sid}")
+
+    raise ValueError(f"action not allowed in bridge v1: {action}")
