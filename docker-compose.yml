@@ -4,7 +4,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      THOTH_API_KEY: ${THOTH_API_KEY:?THOTH_API_KEY must be provided by --env-file}
+      THOTH_API_KEY: ${THOTH_API_KEY:?THOTH_API_KEY must be provided explicitly}
       THOTH_API_URL: http://api:8080
       BRIDGE_QUEUE_URL: https://raw.githubusercontent.com/heldersontuc-collab/thoth-browser-bridge/main/queue.json
       BRIDGE_DATA_DIR: /data
