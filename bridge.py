@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from bridge_crypto import b64d, decrypt_task, encrypt_result, load_or_create_private_key, public_key_b64
 
 QUEUE_URL = os.getenv("BRIDGE_QUEUE_URL", "https://raw.githubusercontent.com/heldersontuc-collab/thoth-browser-bridge/main/queue.json")
+TRIGGER_URL = os.getenv("BRIDGE_TRIGGER_URL", "https://raw.githubusercontent.com/heldersontuc-collab/thoth-browser-bridge/main/trigger.json")
 DATA_DIR = Path(os.getenv("BRIDGE_DATA_DIR", "/data"))
 POLL_SECONDS = max(2, int(os.getenv("BRIDGE_POLL_SECONDS", "4")))
 RESULT_TTL = max(60, int(os.getenv("BRIDGE_RESULT_TTL_SECONDS", "1800")))
@@ -25,12 +26,14 @@ MAX_RESULT_BYTES = 262144
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 KEY_DIR = DATA_DIR / "keys"
 RESULT_DIR = DATA_DIR / "results"
+STAGE_DIR = DATA_DIR / "staged"
 KEY_DIR.mkdir(exist_ok=True)
 RESULT_DIR.mkdir(exist_ok=True)
+STAGE_DIR.mkdir(exist_ok=True)
 PROCESSED_FILE = DATA_DIR / "processed.json"
 PRIVATE_KEY_FILE = KEY_DIR / "vps_x25519.key"
 
-app = FastAPI(title="THOTH Browser Bridge", version="1.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="THOTH Browser Bridge", version="1.2.0", docs_url=None, redoc_url=None, openapi_url=None)
 _worker: asyncio.Task | None = None
 log = logging.getLogger("thoth.bridge")
 PRIVATE_KEY = load_or_create_private_key(PRIVATE_KEY_FILE)
@@ -40,6 +43,7 @@ STATUS: dict[str, Any] = {
     "last_seen_task_id": None,
     "last_processed_task_id": None,
     "last_result_task_id": None,
+    "last_trigger_task_id": None,
 }
 
 def load_processed() -> set[str]:
@@ -78,6 +82,27 @@ def cleanup_results() -> None:
         try:
             if p.stat().st_mtime < cutoff:
                 p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+def valid_task_id(task_id: str) -> bool:
+    return bool(task_id) and len(task_id) <= 128 and all(
+        c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in task_id
+    )
+
+def cleanup_staged() -> None:
+    cutoff = time.time() - MAX_TASK_AGE
+    files = sorted(STAGE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
+    for p in files:
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
+    files = sorted(STAGE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    for p in files[50:]:
+        try:
+            p.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -121,17 +146,25 @@ async def poll_loop() -> None:
             STATUS["last_poll_at"] = int(time.time())
             STATUS["last_poll_error"] = None
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                r = await client.get(QUEUE_URL, headers={"Cache-Control": "no-cache"}, params={"_": int(time.time())})
+                r = await client.get(TRIGGER_URL, headers={"Cache-Control": "no-cache"}, params={"_": int(time.time())})
                 r.raise_for_status()
-                queue = r.json()
-            tasks = list(queue.get("tasks") or [])[-MAX_QUEUE_TASKS:]
-            for envelope in tasks:
-                if isinstance(envelope, dict):
+                trigger = r.json()
+
+            task_id = str(trigger.get("task_id") or "")
+            STATUS["last_trigger_task_id"] = task_id or None
+            if task_id and valid_task_id(task_id) and task_id not in PROCESSED:
+                staged = STAGE_DIR / f"{task_id}.json"
+                if staged.exists():
+                    envelope = json.loads(staged.read_text("utf-8"))
                     await process_one(envelope)
+                    if task_id in PROCESSED:
+                        staged.unlink(missing_ok=True)
+
+            cleanup_staged()
             cleanup_results()
         except Exception as exc:
             STATUS["last_poll_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-            log.warning("queue_poll_failed error_type=%s", type(exc).__name__)
+            log.warning("trigger_poll_failed error_type=%s", type(exc).__name__)
         await asyncio.sleep(POLL_SECONDS)
 
 @app.on_event("startup")
@@ -146,7 +179,7 @@ async def shutdown() -> None:
 
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
-    return {"ok": True, "service": "THOTH Browser Bridge", "version": "1.1.0"}
+    return {"ok": True, "service": "THOTH Browser Bridge", "version": "1.2.0"}
 
 @app.get("/readyz")
 async def readyz():
@@ -175,6 +208,39 @@ async def public_key():
         {"v": 1, "alg": "X25519", "public_key": public_key_b64(PRIVATE_KEY)},
         headers={"Cache-Control": "no-store"},
     )
+
+@app.get("/stage")
+async def stage_encrypted_task(e: str):
+    import base64
+
+    if not e or len(e) > 65536:
+        raise HTTPException(status_code=400, detail="invalid envelope size")
+    try:
+        padded = e + "=" * ((4 - len(e) % 4) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        envelope = json.loads(raw)
+        task_id = str(envelope.get("task_id") or "")
+        if not valid_task_id(task_id):
+            raise ValueError("invalid task id")
+        for key in ("ephemeral_pub", "nonce", "ciphertext"):
+            if not isinstance(envelope.get(key), str) or not envelope[key]:
+                raise ValueError(f"missing {key}")
+        encoded = json.dumps(envelope, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 49152:
+            raise ValueError("envelope too large")
+        p = STAGE_DIR / f"{task_id}.json"
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(encoded, "utf-8")
+        tmp.replace(p)
+        cleanup_staged()
+        return JSONResponse(
+            {"ok": True, "task_id": task_id, "state": "staged_waiting_for_github_trigger"},
+            headers={"Cache-Control": "no-store"},
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid encrypted envelope")
 
 @app.get("/result/{task_id}")
 async def get_result(task_id: str):
