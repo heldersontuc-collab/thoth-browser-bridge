@@ -17,7 +17,8 @@ services:
     ports:
       - "127.0.0.1:8800:8800"
     networks:
-      - thoth_browser
+      - thoth_control_api
+      - bridge_egress
     mem_limit: 192m
     pids_limit: 128
     cap_drop:
@@ -29,6 +30,7 @@ services:
       - /tmp:size=32m,mode=1777
 
 networks:
-  thoth_browser:
+  thoth_control_api:
     external: true
-    name: thoth-browser-node_default
+    name: thoth-browser-node_control_api
+  bridge_egress:
