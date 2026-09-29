@@ -1,0 +1,51 @@
++    store = EventStore(tmp_path / "events-sensitive.sqlite3")
++    mgr = BrowserManager(store)
++
++    html = """
++    <html><body>
++      <label for='cc'>Card number</label><input id='cc' name='cardNumber' type='text' />
++      <label for='cvv'>CVV</label><input id='cvv' type='text' />
++      <label for='pwd'>Senha</label><input id='pwd' type='text' name='password_value' />
++      <input type='hidden' name='csrf_token' value='TOPSECRET' />
++      <input id='safe' name='nickname' value='VISIBLE_BUT_MUST_NOT_LEAK_IN_INSPECT' />
++    </body></html>
++    """
++    session = await mgr.open_session(profile="pytest")
++    sid = session["session_id"]
++    await mgr.get(sid).page.set_content(html)
++
++    for selector in ("#cc", "#cvv", "#pwd"):
++        result = await mgr.fill(sid, by="css", selector=selector, value="123456789", allow_side_effect=True)
++        assert result["human_required"] is True
++
++    inspected = await mgr.inspect(sid)
++    safe = next(e for e in inspected["elements"] if e.get("id") == "safe")
++    assert "VISIBLE_BUT_MUST_NOT_LEAK_IN_INSPECT" not in safe.get("text", "")
++    assert all("123456789" not in str(e) for e in inspected["elements"])
++
++    with pytest.raises(ValueError, match="Raw HTML extraction is disabled"):
++        await mgr.extract(sid, "html")
++
++    await mgr.close_session(sid)
++    await mgr.stop()
++
++
++def test_compose_separates_control_api_from_browser_cdp():
++    import yaml
++    compose_path = Path(__file__).parents[1] / "docker-compose.yml"
++    data = yaml.safe_load(compose_path.read_text())
++    services = data["services"]
++    assert "control_api" in services["api"]["networks"]
++    assert "browser_net" in services["api"]["networks"]
++    assert services["mcp"]["networks"] == ["control_api"]
++    assert "browser_net" not in services["mcp"]["networks"]
++    assert "control_api" in data["networks"]
++    assert "browser_net" in data["networks"]
++
++
++def test_caddy_health_rewrite_and_version():
++    root = Path(__file__).parents[1]
++    caddy = (root / "deploy" / "Caddyfile").read_text()
++    assert "rewrite * /healthz" in caddy
++    main = (root / "app" / "main.py").read_text()
++    assert "1.2.2-audited" in main
