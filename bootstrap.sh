@@ -26,13 +26,17 @@ else
   git clone --depth 1 "$REPO" "$DIR"
 fi
 
-mkdir -p "$DIR/data"
+mkdir -p "$DIR/data/keys" "$DIR/data/results"
 chown -R 65532:65532 "$DIR/data"
-chmod 700 "$DIR/data"
+chmod 700 "$DIR/data" "$DIR/data/keys" "$DIR/data/results"
 
 say "Construindo somente o THOTH Browser Bridge"
 cd "$DIR"
 docker compose build bridge
+
+say "Validando escrita no volume persistente antes de iniciar"
+docker compose run --rm --no-deps --entrypoint sh bridge -c 'id; ls -ldn /data /data/keys /data/results; touch /data/.write_test /data/keys/.write_test /data/results/.write_test; rm -f /data/.write_test /data/keys/.write_test /data/results/.write_test' || fail "container nao consegue escrever em /data"
+
 docker compose up -d bridge
 
 say "Testando endpoint local"
