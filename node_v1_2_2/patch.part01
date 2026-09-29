@@ -105,15 +105,3 @@ index 2b60adb..52b9da5 100644
  
      def _human_only(self, meta: dict[str, Any]) -> bool:
 -        text = meta.get("text", "")
--        href = meta.get("href", "")
--        action = meta.get("form_action", "")
--        ac = meta.get("autocomplete", "")
-+        descriptors = " ".join(
-+            str(meta.get(k, "") or "")
-+            for k in ("text", "aria_label", "name", "id", "placeholder", "label")
-+        )
-+        href = str(meta.get("href", "") or "")
-+        action = str(meta.get("form_action", "") or "")
-+        ac = str(meta.get("autocomplete", "") or "").lower()
-         return bool(
--            meta.get("type") in _SE
