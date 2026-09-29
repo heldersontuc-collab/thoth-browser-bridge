@@ -1,0 +1,69 @@
+CRET_TYPES
++            str(meta.get("type", "") or "").lower() in _SECRET_TYPES
+             or ac in _SECRET_AUTOCOMPLETE
+-            or _HUMAN_ONLY_WORDS.search(text)
++            or _SENSITIVE_FIELD_WORDS.search(descriptors)
++            or _HUMAN_ONLY_WORDS.search(descriptors)
+             or _HUMAN_ONLY_HREF.search(href)
+             or _HUMAN_ONLY_HREF.search(action)
+         )
+@@ -360,14 +388,6 @@ class BrowserManager:
+         async with s.lock:
+             loc = self._locator(s.page, **kwargs).first
+             meta = await self._target_meta(loc)
+-            if meta.get("type") in _SECRET_TYPES or meta.get("autocomplete") in _SECRET_AUTOCOMPLETE:
+-                self.store.add(session_id=session_id, profile=s.profile, action="fill.blocked_human", success=False, detail={**kwargs, "value": "<redacted>", "reason": "secret_field"})
+-                return {
+-                    "ok": False,
+-                    "human_required": True,
+-                    "reason": "Passwords, OTP codes and card fields are human-only. Use the remote browser screen.",
+-                    "secret": True,
+-                }
+             if self._human_only(meta):
+                 self.store.add(session_id=session_id, profile=s.profile, action="fill.blocked_human", success=False, detail={**kwargs, "value": "<redacted>", "reason": "sensitive_field"})
+                 return {
+@@ -379,15 +399,15 @@ class BrowserManager:
+             if not allow_side_effect:
+                 handlers = await loc.evaluate("el => !!(el.onchange || el.oninput || el.form)")
+                 if handlers:
+-                    self.store.add(session_id=session_id, profile=s.profile, action="fill.blocked_confirmation", success=False, detail={**kwargs, "value": "<redacted>" if secret else value[:200], "reason": "confirmation_required"})
++                    self.store.add(session_id=session_id, profile=s.profile, action="fill.blocked_confirmation", success=False, detail={**kwargs, "value": "<redacted>", "reason": "confirmation_required"})
+                     return {"ok": False, "needs_confirmation": True, "reason": "Field may trigger page or form side effects; retry with allow_side_effect=true", "secret": secret}
+             try:
+                 await loc.fill(value, timeout=timeout)
+-                detail = {**kwargs, "value": "<redacted>" if secret else value[:200], "allow_side_effect": allow_side_effect}
++                detail = {**kwargs, "value": "<redacted>", "allow_side_effect": allow_side_effect}
+                 self.store.add(session_id=session_id, profile=s.profile, action="fill", success=True, detail=detail)
+                 return {"ok": True, "secret": secret}
+             except Exception as exc:
+-                self.store.add(session_id=session_id, profile=s.profile, action="fill", success=False, detail={"error": str(exc)[:1000], **kwargs, "value": "<redacted>" if secret else value[:200]})
++                self.store.add(session_id=session_id, profile=s.profile, action="fill", success=False, detail={"error": str(exc)[:1000], **kwargs, "value": "<redacted>"})
+                 raise
+ 
+     async def press(self, session_id: str, *, key: str, **kwargs: Any) -> dict[str, Any]:
+@@ -441,34 +461,47 @@ class BrowserManager:
+             elements = await s.page.evaluate("""
+                 () => {
+                   const nodes = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"]')].slice(0,250);
++                  const sensitive = /(password|passcode|senha|pin|otp|one[ -]?time|verification code|codigo de verificacao|card(?: number)?|credit card|debit card|cart[aã]o|numero do cart[aã]o|cvv|cvc|security code|expiry|expiration|validade|pix|transfer|bank account|account number|routing|iban|swift|cpf|cnpj|social security|ssn)/i;
+                   const labelFor = (el) => {
+                     if (el.id) {
+-                      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
++                      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+-                      if (lab) return lab.innerText.trim();
++                      if (lab) return (lab.innerText || lab.textContent || '').trim();
+                     }
+                     const p = el.closest('label');
+-                    return p ? p.innerText.trim() : '';
++                    return p ? (p.innerText || p.textContent || '').trim() : '';
+                   };
+-                  const isSecret = (el) => {
++                  const isSensitive = (el) => {
+                     const type=(el.getAttribute('type')||'').toLowerCase();
+                     const ac=(el.getAttribute('autocomplete')||'').toLowerCase();
+-                    return type==='password' || ['current-password','new-password','one-time-code','cc-number','cc-csc','cc-exp','cc-exp-month','cc-exp-year'].includes(ac);
++                    const parts=[
++                      el.getAttribute('aria-label')||'',
++                      el.getAttribute('name')||'',
++                      el.id||'',
++                
