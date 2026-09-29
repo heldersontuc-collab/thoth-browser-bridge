@@ -1,4 +1,15 @@
-CRET_TYPES
+-        href = meta.get("href", "")
+-        action = meta.get("form_action", "")
+-        ac = meta.get("autocomplete", "")
++        descriptors = " ".join(
++            str(meta.get(k, "") or "")
++            for k in ("text", "aria_label", "name", "id", "placeholder", "label")
++        )
++        href = str(meta.get("href", "") or "")
++        action = str(meta.get("form_action", "") or "")
++        ac = str(meta.get("autocomplete", "") or "").lower()
+         return bool(
+-            meta.get("type") in _SECRET_TYPES
 +            str(meta.get("type", "") or "").lower() in _SECRET_TYPES
              or ac in _SECRET_AUTOCOMPLETE
 -            or _HUMAN_ONLY_WORDS.search(text)
@@ -48,22 +59,3 @@ CRET_TYPES
 +                  const sensitive = /(password|passcode|senha|pin|otp|one[ -]?time|verification code|codigo de verificacao|card(?: number)?|credit card|debit card|cart[aã]o|numero do cart[aã]o|cvv|cvc|security code|expiry|expiration|validade|pix|transfer|bank account|account number|routing|iban|swift|cpf|cnpj|social security|ssn)/i;
                    const labelFor = (el) => {
                      if (el.id) {
--                      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-+                      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
--                      if (lab) return lab.innerText.trim();
-+                      if (lab) return (lab.innerText || lab.textContent || '').trim();
-                     }
-                     const p = el.closest('label');
--                    return p ? p.innerText.trim() : '';
-+                    return p ? (p.innerText || p.textContent || '').trim() : '';
-                   };
--                  const isSecret = (el) => {
-+                  const isSensitive = (el) => {
-                     const type=(el.getAttribute('type')||'').toLowerCase();
-                     const ac=(el.getAttribute('autocomplete')||'').toLowerCase();
--                    return type==='password' || ['current-password','new-password','one-time-code','cc-number','cc-csc','cc-exp','cc-exp-month','cc-exp-year'].includes(ac);
-+                    const parts=[
-+                      el.getAttribute('aria-label')||'',
-+                      el.getAttribute('name')||'',
-+                      el.id||'',
-+                
