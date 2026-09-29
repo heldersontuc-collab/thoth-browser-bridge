@@ -1,0 +1,119 @@
+diff --git a/.env.example b/.env.example
+index 79d5af3..e9d234f 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,6 +1,6 @@
+ COMPOSE_FILE=docker-compose.yml
+ COMPOSE_PROJECT_NAME=thoth-browser-node
+-# THOTH Browser Node V1.2 - arquivo criado automaticamente pelo instalador.
++# THOTH Browser Node V1.2.2 AUDITED - arquivo criado automaticamente pelo instalador.
+ THOTH_API_KEY=CHANGE_ME_WITH_A_LONG_RANDOM_SECRET
+ THOTH_DATA_DIR=/data
+ THOTH_BLOCK_PRIVATE_NETWORKS=true
+@@ -27,8 +27,8 @@ CONTROL_PLANE_TUNNEL_ID=
+ 
+ # Limites para proteger os outros sistemas desta VPS
+ THOTH_BROWSER_MEM_LIMIT=1280m
+-THOTH_API_MEM_LIMIT=384m
+-THOTH_MCP_MEM_LIMIT=256m
+-THOTH_PROXY_MEM_LIMIT=64m
+-THOTH_CADDY_MEM_LIMIT=128m
++THOTH_API_MEM_LIMIT=256m
++THOTH_MCP_MEM_LIMIT=192m
++THOTH_PROXY_MEM_LIMIT=48m
++THOTH_CADDY_MEM_LIMIT=96m
+ THOTH_TUNNEL_MEM_LIMIT=128m
+diff --git a/README.md b/README.md
+index 4b8bcaa..d724323 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,6 @@
+ > Ajustado para uma VPS já em produção. Esta edição evita as portas 80/443 e 8787, não reinicia serviços existentes e faz pré-teste de espaço/memória antes de subir qualquer container novo.
+ 
+-# THOTH Browser Node V1.2.1 · VPS SAFE
++# THOTH Browser Node V1.2.2 AUDITED · VPS SAFE
+ 
+ Um **Chromium persistente, visível no celular e controlável pelo ChatGPT**, hospedado 24/7 na VPS.
+ 
+diff --git a/VPS_ALVO_AUDITADA.txt b/VPS_ALVO_AUDITADA.txt
+index c298a2c..07cd1f4 100644
+--- a/VPS_ALVO_AUDITADA.txt
++++ b/VPS_ALVO_AUDITADA.txt
+@@ -1,4 +1,4 @@
+-THOTH Browser Node V1.2.1 - perfil da VPS auditada
++THOTH Browser Node V1.2.2 AUDITED - perfil da VPS auditada
+ 
+ Serviços preservados identificados:
+ - Nginx público: 80/443
+diff --git a/app/browser_manager.py b/app/browser_manager.py
+index 2b60adb..52b9da5 100644
+--- a/app/browser_manager.py
++++ b/app/browser_manager.py
+@@ -49,6 +49,15 @@ _SECRET_AUTOCOMPLETE = {
+     "cc-exp-year",
+ }
+ 
++_SENSITIVE_FIELD_WORDS = re.compile(
++    r"\b(password|passcode|senha|pin|otp|one[ -]?time|verification code|codigo de verificacao|"
++    r"card(?: number)?|credit card|debit card|cart[aã]o|numero do cart[aã]o|cvv|cvc|security code|"
++    r"expiry|expiration|validade|pix|transfer|bank account|account number|routing|iban|swift|"
++    r"cpf|cnpj|social security|ssn)\b",
++    re.I,
++)
++
++
+ 
+ def _safe_name(value: str, fallback: str = "default") -> str:
+     value = _SAFE.sub("_", value.strip()).strip("._")
+@@ -293,25 +302,44 @@ class BrowserManager:
+         raise ValueError(f"Unsupported locator strategy: {by}")
+ 
+     async def _target_meta(self, loc: Locator) -> dict[str, Any]:
+-        return await loc.evaluate("""el => ({
+-            tag:(el.tagName||'').toLowerCase(),
+-            type:(el.getAttribute('type')||'').toLowerCase(),
+-            autocomplete:(el.getAttribute('autocomplete')||'').toLowerCase(),
+-            text:(el.innerText||el.value||el.getAttribute('aria-label')||'').trim().slice(0,240),
+-            href:el.href||'',
+-            form_action:(el.form && el.form.action)||'',
+-            form_method:((el.form && el.form.method)||'').toLowerCase()
+-        })""")
++        return await loc.evaluate("""el => {
++            const labelFor = (node) => {
++              if (node.id) {
++                const lab = document.querySelector(`label[for="${CSS.escape(node.id)}"]`);
++                if (lab) return (lab.innerText || lab.textContent || '').trim();
++              }
++              const parent = node.closest('label');
++              return parent ? (parent.innerText || parent.textContent || '').trim() : '';
++            };
++            return {
++              tag:(el.tagName||'').toLowerCase(),
++              type:(el.getAttribute('type')||'').toLowerCase(),
++              autocomplete:(el.getAttribute('autocomplete')||'').toLowerCase(),
++              text:(el.innerText||'').trim().slice(0,240),
++              aria_label:(el.getAttribute('aria-label')||'').trim().slice(0,240),
++              name:(el.getAttribute('name')||'').trim().slice(0,240),
++              id:(el.id||'').trim().slice(0,240),
++              placeholder:(el.getAttribute('placeholder')||'').trim().slice(0,240),
++              label:labelFor(el).slice(0,240),
++              href:el.href||'',
++              form_action:(el.form && el.form.action)||'',
++              form_method:((el.form && el.form.method)||'').toLowerCase()
++            };
++        }""")
+ 
+     def _human_only(self, meta: dict[str, Any]) -> bool:
+-        text = meta.get("text", "")
+-        href = meta.get("href", "")
+-        action = meta.get("form_action", "")
+-        ac = meta.get("autocomplete", "")
++        descriptors = " ".join(
++            str(meta.get(k, "") or "")
++            for k in ("text", "aria_label", "name", "id", "placeholder", "label")
++        )
++        href = str(meta.get("href", "") or "")
++        action = str(meta.get("form_action", "") or "")
++        ac = str(meta.get("autocomplete", "") or "").lower()
+         return bool(
+-            meta.get("type") in _SE
