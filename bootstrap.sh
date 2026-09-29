@@ -27,6 +27,7 @@ else
 fi
 
 mkdir -p "$DIR/data"
+chown -R 65532:65532 "$DIR/data"
 chmod 700 "$DIR/data"
 
 say "Construindo somente o THOTH Browser Bridge"
@@ -42,7 +43,7 @@ for i in $(seq 1 30); do
     break
   fi
   sleep 2
-  [ "$i" -lt 30 ] || fail "bridge nao respondeu em 127.0.0.1:8800"
+  [ "$i" -lt 30 ] || { echo; echo "=== LOGS DO BRIDGE ==="; docker compose logs --tail=80 bridge || true; fail "bridge nao respondeu em 127.0.0.1:8800"; }
 done
 
 say "Estado atual"
