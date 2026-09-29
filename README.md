@@ -1,0 +1,1 @@
+# thoth-browser-bridge
