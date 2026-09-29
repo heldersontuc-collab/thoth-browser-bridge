@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -28,8 +29,9 @@ RESULT_DIR.mkdir(exist_ok=True)
 PROCESSED_FILE = DATA_DIR / "processed.json"
 PRIVATE_KEY_FILE = KEY_DIR / "vps_x25519.key"
 
-app = FastAPI(title="THOTH Browser Bridge", version="1.0.0")
+app = FastAPI(title="THOTH Browser Bridge", version="1.1.0", docs_url=None, redoc_url=None, openapi_url=None)
 _worker: asyncio.Task | None = None
+log = logging.getLogger("thoth.bridge")
 PRIVATE_KEY = load_or_create_private_key(PRIVATE_KEY_FILE)
 STATUS: dict[str, Any] = {
     "last_poll_at": None,
@@ -95,12 +97,15 @@ async def process_one(envelope: dict[str, Any]) -> None:
         payload = {"ok": True, "task_id": task_id, "finished_at": int(time.time()), "result": result}
     except Exception as exc:
         if response_key is None:
+            log.warning("task_rejected task_id=%s error_type=%s", task_id[:128], type(exc).__name__)
             PROCESSED.add(task_id)
             save_processed(PROCESSED)
             return
-        payload = {"ok": False, "task_id": task_id, "finished_at": int(time.time()), "error": str(exc)[:2000]}
+        log.warning("task_failed task_id=%s error_type=%s", task_id[:128], type(exc).__name__)
+        payload = {"ok": False, "task_id": task_id, "finished_at": int(time.time()), "error": str(exc)[:1000]}
 
     write_result(task_id, encrypt_result(task_id, response_key, payload))
+    log.info("task_result_ready task_id=%s", task_id[:128])
     STATUS["last_result_task_id"] = task_id
     STATUS["last_processed_task_id"] = task_id
     PROCESSED.add(task_id)
@@ -121,7 +126,8 @@ async def poll_loop() -> None:
                     await process_one(envelope)
             cleanup_results()
         except Exception as exc:
-            STATUS["last_poll_error"] = str(exc)[:500]
+            STATUS["last_poll_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            log.warning("queue_poll_failed error_type=%s", type(exc).__name__)
         await asyncio.sleep(POLL_SECONDS)
 
 @app.on_event("startup")
@@ -136,7 +142,28 @@ async def shutdown() -> None:
 
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
-    return {"ok": True, "service": "THOTH Browser Bridge", "version": "1.0.0"}
+    return {"ok": True, "service": "THOTH Browser Bridge", "version": "1.1.0"}
+
+@app.get("/readyz")
+async def readyz():
+    poll_age = None if STATUS["last_poll_at"] is None else int(time.time()) - int(STATUS["last_poll_at"])
+    queue_ok = STATUS["last_poll_at"] is not None and STATUS["last_poll_error"] is None and poll_age <= max(20, POLL_SECONDS * 4)
+    browser_api_ok = False
+    try:
+        from bridge_mcp_client import call_tool
+        result = await call_tool("health", {})
+        browser_api_ok = bool(result.get("ok"))
+    except Exception as exc:
+        log.warning("browser_api_readiness_failed error_type=%s", type(exc).__name__)
+    body = {
+        "ok": bool(queue_ok and browser_api_ok),
+        "queue_ok": bool(queue_ok),
+        "browser_api_ok": bool(browser_api_ok),
+        "poll_age_seconds": poll_age,
+    }
+    if not body["ok"]:
+        raise HTTPException(status_code=503, detail=body)
+    return body
 
 @app.get("/public-key")
 async def public_key() -> dict[str, Any]:
@@ -151,11 +178,3 @@ async def get_result(task_id: str):
         raise HTTPException(status_code=404, detail="not ready")
     return JSONResponse(json.loads(p.read_text("utf-8")), headers={"Cache-Control": "no-store"})
 
-
-@app.get("/bridge-status")
-async def bridge_status() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "processed_count": len(PROCESSED),
-        **STATUS,
-    }
