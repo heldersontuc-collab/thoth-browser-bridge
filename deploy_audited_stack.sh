@@ -148,6 +148,28 @@ with urllib.request.urlopen(req, timeout=8) as r:
 assert sessions.get("mode") == "shared-visible", sessions
 print("AUTHENTICATED_API_OK")
 
+profile=os.getenv("THOTH_SHARED_PROFILE","sorteios")
+body=json.dumps({"profile":profile,"start_url":None}).encode()
+open_req=urllib.request.Request(
+    "http://127.0.0.1:8080/v1/sessions/open",
+    data=body,
+    method="POST",
+    headers={"X-THOTH-Key":key,"Content-Type":"application/json"},
+)
+with urllib.request.urlopen(open_req, timeout=12) as r:
+    opened=json.loads(r.read())
+assert opened.get("shared_visible_browser") is True, opened
+sid=opened["session_id"]
+close_req=urllib.request.Request(
+    f"http://127.0.0.1:8080/v1/sessions/{sid}",
+    method="DELETE",
+    headers={"X-THOTH-Key":key},
+)
+with urllib.request.urlopen(close_req, timeout=8) as r:
+    closed=json.loads(r.read())
+assert closed.get("browser_kept_running") is True, closed
+print("PLAYWRIGHT_SHARED_BROWSER_OK")
+
 with urllib.request.urlopen("http://browser:9223/json/version", timeout=8) as r:
     raw=r.read(1600).decode("utf-8","replace")
 assert "webSocketDebuggerUrl" in raw, raw
