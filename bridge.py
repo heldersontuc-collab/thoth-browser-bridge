@@ -31,6 +31,13 @@ PRIVATE_KEY_FILE = KEY_DIR / "vps_x25519.key"
 app = FastAPI(title="THOTH Browser Bridge", version="1.0.0")
 _worker: asyncio.Task | None = None
 PRIVATE_KEY = load_or_create_private_key(PRIVATE_KEY_FILE)
+STATUS: dict[str, Any] = {
+    "last_poll_at": None,
+    "last_poll_error": None,
+    "last_seen_task_id": None,
+    "last_processed_task_id": None,
+    "last_result_task_id": None,
+}
 
 def load_processed() -> set[str]:
     try:
@@ -70,6 +77,7 @@ def cleanup_results() -> None:
 
 async def process_one(envelope: dict[str, Any]) -> None:
     task_id = str(envelope.get("task_id", ""))
+    STATUS["last_seen_task_id"] = task_id or None
     if not task_id or task_id in PROCESSED:
         return
     response_key: bytes | None = None
@@ -93,12 +101,16 @@ async def process_one(envelope: dict[str, Any]) -> None:
         payload = {"ok": False, "task_id": task_id, "finished_at": int(time.time()), "error": str(exc)[:2000]}
 
     write_result(task_id, encrypt_result(task_id, response_key, payload))
+    STATUS["last_result_task_id"] = task_id
+    STATUS["last_processed_task_id"] = task_id
     PROCESSED.add(task_id)
     save_processed(PROCESSED)
 
 async def poll_loop() -> None:
     while True:
         try:
+            STATUS["last_poll_at"] = int(time.time())
+            STATUS["last_poll_error"] = None
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 r = await client.get(QUEUE_URL, headers={"Cache-Control": "no-cache"}, params={"_": int(time.time())})
                 r.raise_for_status()
@@ -108,8 +120,8 @@ async def poll_loop() -> None:
                 if isinstance(envelope, dict):
                     await process_one(envelope)
             cleanup_results()
-        except Exception:
-            pass
+        except Exception as exc:
+            STATUS["last_poll_error"] = str(exc)[:500]
         await asyncio.sleep(POLL_SECONDS)
 
 @app.on_event("startup")
@@ -138,3 +150,12 @@ async def get_result(task_id: str):
     if not p.exists():
         raise HTTPException(status_code=404, detail="not ready")
     return JSONResponse(json.loads(p.read_text("utf-8")), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/bridge-status")
+async def bridge_status() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "processed_count": len(PROCESSED),
+        **STATUS,
+    }
