@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -u
 
+STAMP="$(date +%Y%m%d_%H%M%S)"
+REPORT="/root/THOTH_RUNTIME_AUDIT_${STAMP}.txt"
+exec > >(tee "$REPORT") 2>&1
+
 NODE_DIR="/opt/thoth-browser-node/THOTH_BROWSER_NODE_V1_2_1_VPS_SAFE"
 BRIDGE_DIR="/opt/thoth-browser-bridge"
 
@@ -89,3 +93,15 @@ systemctl --failed --no-pager 2>/dev/null || true
 
 section "AUDIT COMPLETE"
 echo "THOTH_RUNTIME_AUDIT_DONE"
+
+
+printf '\n===== RESUMO PARA ENVIAR AO CHATGPT =====\n'
+printf 'REPORT=%s\n' "$REPORT"
+printf 'DISK_ROOT='; df -h / | awk 'NR==2{print $5 " used, " $4 " free"}'
+printf 'MEM='; free -m | awk '/Mem:/ {print $3 "MB used / " $2 "MB total"}'
+printf 'SWAP='; free -m | awk '/Swap:/ {print $3 "MB used / " $2 "MB total"}'
+printf 'BRIDGE='; curl -fsS --max-time 4 http://127.0.0.1:8800/healthz 2>/dev/null || echo FAIL
+printf '\nREADY='; curl -fsS --max-time 6 http://127.0.0.1:8800/readyz 2>/dev/null || echo NOT_READY_OR_OLD_VERSION
+printf '\nTAILSCALE_SERVE='; tailscale serve status --json >/dev/null 2>&1 && echo PRESENT || echo CHECK_TEXT_ABOVE
+printf 'FAILED_SERVICES='; systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l
+echo 'THOTH_RUNTIME_AUDIT_DONE'
