@@ -47,7 +47,7 @@ async def call_tool(action: str, args: dict[str, Any]) -> Any:
     if action == "navigate":
         return await api("POST", f"/v1/sessions/{sid}/navigate", {"url": args["url"]})
     if action == "inspect":
-        return await api("GET", f"/v1/sessions/{sid}/inspect")
+        raise ValueError("bridge v1 blocks DOM form inspection until Browser Node V1.2.2 redaction is deployed")
     if action == "extract":
         mode = str(args.get("mode", "text")).lower()
         if mode not in {"text", "links"}:
@@ -66,8 +66,7 @@ async def call_tool(action: str, args: dict[str, Any]) -> Any:
     if action == "close_tab":
         return await api("POST", f"/v1/sessions/{sid}/tabs/close", {"index": int(args["index"])})
     if action == "events":
-        limit = max(1, min(int(args.get("limit", 100)), 500))
-        return await api("GET", f"/v1/events?limit={limit}")
+        raise ValueError("bridge v1 blocks historical event logs because old Browser Node versions may contain unredacted field values")
     if action == "close":
         return await api("DELETE", f"/v1/sessions/{sid}")
 
