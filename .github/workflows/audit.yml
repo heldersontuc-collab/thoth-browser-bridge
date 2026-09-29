@@ -22,7 +22,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest pytest-asyncio
       - name: Compile
-        run: python -m compileall -q bridge.py bridge_crypto.py bridge_mcp_client.py tests
+        run: python -m compileall -q bridge.py bridge_crypto.py bridge_mcp_client.py tests node_v1_2_2/upgrade_v1_2_2.py
       - name: Unit tests
         env:
           PYTHONPATH: .
