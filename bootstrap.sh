@@ -54,9 +54,9 @@ say "Estado atual"
 docker compose ps
 
 if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
-  say "Tentando publicar SOMENTE resultados cifrados via Tailscale Funnel :10000"
+  say "Tentando publicar SOMENTE resultados cifrados via Tailscale Funnel :8443"
   set +e
-  FUNNEL_OUT=$(tailscale funnel --bg --https=10000 http://127.0.0.1:8800 2>&1)
+  FUNNEL_OUT=$(tailscale funnel --bg --https=8443 http://127.0.0.1:8800 2>&1)
   RC=$?
   set -e
   printf '%s\n' "$FUNNEL_OUT"
