@@ -42,3 +42,17 @@ async def test_bridge_v1_blocks_raw_html_and_screenshot(monkeypatch):
         await client.call_tool("extract", {"session_id": "s1", "mode": "html"})
     with pytest.raises(ValueError, match="screenshots human-only"):
         await client.call_tool("screenshot", {"session_id": "s1"})
+
+
+@pytest.mark.asyncio
+async def test_bridge_v1_blocks_inspect_and_events(monkeypatch):
+    async def fake_api(method, path, body=None):
+        if path == "/v1/sessions/open":
+            return {"session_id": "s1"}
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "api", fake_api)
+    with pytest.raises(ValueError, match="blocks DOM form inspection"):
+        await client.call_tool("inspect", {"session_id": "s1"})
+    with pytest.raises(ValueError, match="blocks historical event logs"):
+        await client.call_tool("events", {})
