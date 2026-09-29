@@ -33,3 +33,16 @@ jobs:
         env:
           THOTH_API_KEY: audit-test-key
         run: docker compose config >/dev/null
+
+  patch-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Browser Node patch
+        run: |
+          cat node_v1_2_2/patch.part01 node_v1_2_2/patch.part02 node_v1_2_2/patch.part03 node_v1_2_2/patch.part04 node_v1_2_2/patch.part05 > /tmp/node.patch
+          echo "0aac3b284d06df9e80212b03c664ddfb0655478bf8d0d849b1e9dc74512523dd  /tmp/node.patch" | sha256sum -c -
+      - name: Bash syntax
+        run: |
+          bash -n deploy_audited_stack.sh
+          bash -n audit_vps.sh
