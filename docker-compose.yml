@@ -1,0 +1,28 @@
+name: thoth-browser-bridge
+services:
+  bridge:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - /opt/thoth-browser-node/THOTH_BROWSER_NODE_V1_2_1_VPS_SAFE/.env
+    environment:
+      THOTH_API_URL: http://api:8080
+      BRIDGE_QUEUE_URL: https://raw.githubusercontent.com/heldersontuc-collab/thoth-browser-bridge/main/queue.json
+      BRIDGE_DATA_DIR: /data
+      BRIDGE_POLL_SECONDS: "4"
+      BRIDGE_RESULT_TTL_SECONDS: "1800"
+      BRIDGE_PROFILE: sorteios
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8800:8800"
+    networks:
+      - thoth_browser
+    mem_limit: 192m
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  thoth_browser:
+    external: true
+    name: thoth-browser-node_default
