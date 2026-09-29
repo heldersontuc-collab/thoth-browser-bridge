@@ -20,6 +20,7 @@ POLL_SECONDS = max(2, int(os.getenv("BRIDGE_POLL_SECONDS", "4")))
 RESULT_TTL = max(60, int(os.getenv("BRIDGE_RESULT_TTL_SECONDS", "1800")))
 MAX_QUEUE_TASKS = 50
 MAX_TASK_AGE = 900
+MAX_RESULT_BYTES = 262144
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 KEY_DIR = DATA_DIR / "keys"
@@ -65,7 +66,10 @@ async def execute_via_mcp(task: dict[str, Any]) -> Any:
 def write_result(task_id: str, envelope: dict[str, Any]) -> None:
     p = RESULT_DIR / f"{task_id}.json"
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(envelope, separators=(",", ":")), "utf-8")
+    raw = json.dumps(envelope, separators=(",", ":"))
+    if len(raw.encode("utf-8")) > MAX_RESULT_BYTES:
+        raise ValueError("encrypted result exceeds bridge size limit")
+    tmp.write_text(raw, "utf-8")
     tmp.replace(p)
 
 def cleanup_results() -> None:
@@ -166,8 +170,11 @@ async def readyz():
     return body
 
 @app.get("/public-key")
-async def public_key() -> dict[str, Any]:
-    return {"v": 1, "alg": "X25519", "public_key": public_key_b64(PRIVATE_KEY)}
+async def public_key():
+    return JSONResponse(
+        {"v": 1, "alg": "X25519", "public_key": public_key_b64(PRIVATE_KEY)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 @app.get("/result/{task_id}")
 async def get_result(task_id: str):
