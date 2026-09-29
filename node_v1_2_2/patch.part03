@@ -1,0 +1,79 @@
+                       const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+-                      if (lab) return lab.innerText.trim();
++                      if (lab) return (lab.innerText || lab.textContent || '').trim();
+                     }
+                     const p = el.closest('label');
+-                    return p ? p.innerText.trim() : '';
++                    return p ? (p.innerText || p.textContent || '').trim() : '';
+                   };
+-                  const isSecret = (el) => {
++                  const isSensitive = (el) => {
+                     const type=(el.getAttribute('type')||'').toLowerCase();
+                     const ac=(el.getAttribute('autocomplete')||'').toLowerCase();
+-                    return type==='password' || ['current-password','new-password','one-time-code','cc-number','cc-csc','cc-exp','cc-exp-month','cc-exp-year'].includes(ac);
++                    const parts=[
++                      el.getAttribute('aria-label')||'',
++                      el.getAttribute('name')||'',
++                      el.id||'',
++                      el.getAttribute('placeholder')||'',
++                      labelFor(el),
++                      el.innerText||''
++                    ].join(' ');
++                    return type==='password' || ['current-password','new-password','one-time-code','cc-number','cc-csc','cc-exp','cc-exp-month','cc-exp-year'].includes(ac) || sensitive.test(parts);
+                   };
+-                  return nodes.map((el, i) => ({
+-                    index: i,
+-                    tag: el.tagName.toLowerCase(),
+-                    type: el.getAttribute('type') || '',
+-                    role: el.getAttribute('role') || '',
+-                    text: isSecret(el) ? '<redacted>' : (el.innerText || el.value || '').trim().slice(0,300),
+-                    aria_label: el.getAttribute('aria-label') || '',
+-                    name: el.getAttribute('name') || '',
+-                    id: el.id || '',
+-                    placeholder: isSecret(el) ? '<redacted>' : (el.getAttribute('placeholder') || ''),
+-                    label: labelFor(el).slice(0,300),
+-                    href: el.href || '',
+-                    disabled: !!el.disabled,
+-                    secret: isSecret(el)
+-                  }));
++                  return nodes.map((el, i) => {
++                    const secret=isSensitive(el);
++                    const isField=['input','textarea','select'].includes(el.tagName.toLowerCase());
++                    return {
++                      index: i,
++                      tag: el.tagName.toLowerCase(),
++                      type: el.getAttribute('type') || '',
++                      role: el.getAttribute('role') || '',
++                      text: secret ? '<redacted>' : (isField ? '' : (el.innerText || '').trim().slice(0,300)),
++                      aria_label: (el.getAttribute('aria-label') || ''),
++                      name: (el.getAttribute('name') || ''),
++                      id: (el.id || ''),
++                      placeholder: (el.getAttribute('placeholder') || ''),
++                      label: labelFor(el).slice(0,300),
++                      href: el.href || '',
++                      disabled: !!el.disabled,
++                      secret
++                    };
++                  });
+                 }
+             """)
+             return {"session_id": session_id, "profile": s.profile, "url": s.page.url, "title": title, "text": text, "elements": elements}
+@@ -479,7 +512,7 @@ class BrowserManager:
+             if mode == "text":
+                 value = (await s.page.locator("body").inner_text())[:settings.max_text_chars]
+             elif mode == "html":
+-                value = (await s.page.content())[:settings.max_text_chars]
++                raise ValueError("Raw HTML extraction is disabled because hidden DOM fields may contain credentials or tokens")
+             elif mode == "links":
+                 value = await s.page.evaluate("() => [...document.links].slice(0,500).map(a => ({text:(a.innerText||'').trim().slice(0,200), href:a.href}))")
+             else:
+diff --git a/app/main.py b/app/main.py
+index 6881310..5beab59 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
+     await manager.stop()
+ 
+ 
+-app = FastAPI(title="THOTH Browser Node", version="1.2.0", lifespan=lifespan)
++app = FastAPI(title="THOTH Browser Node", version="1.2.2-audited", lifespan=lifespan)
