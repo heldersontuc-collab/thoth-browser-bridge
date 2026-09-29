@@ -1,19 +1,4 @@
 {
   "version": 1,
-  "tasks": [
-    {
-      "v": 1,
-      "task_id": "chatgpt-4df825149c254ce2",
-      "ephemeral_pub": "sDinVRj7o7KkQ1n1+br3VH2XkFEwTbMHVa5g6uFJCVE=",
-      "nonce": "BQ4aU6qed6hQFzx7",
-      "ciphertext": "qBgtqlyCQh/stbn8syuewZirigzZusgYL7yLXhtaiSwjqwncZ2OTJx/DmJHA0Ch7AbPZnIKP2PmN3liau6kAGrO17jnynkXQe7JDSJ2+TAjtnKgNu06Tvz/bQiPEVpFebicR7mT53gZCsYIY3BjdZEdt1AY2XOYVrEwoub6cOYTNZ9lqDndCqKqScsxAphcu5LMXth/UKHV9ilkfjtfDk6iY9QK5FsTu3bFxg3WrbEUSoWJol6afXHe1g4gxKTgensCnTtcK"
-    },
-    {
-      "v": 1,
-      "task_id": "audit-3c11aa33fab54d6a",
-      "ephemeral_pub": "AHryu/cQsQJ8YUAugdwqKVGHAAJXyXjDW3wH460q+Hg=",
-      "nonce": "oep41x4pOHmRv/IE",
-      "ciphertext": "Q79cMwMitpR06SY26XvEumUzHzlPm3drLewVXTidu507TT/tDoYy+tftWfgJHASYpx5s1fCeH52Gy9GP16L1C9rzqOpCJYa3zR9/ilv9ff7kJjdw/i1kkJiLrcDCkqW+wHMwpvX1ue4DfobX+67fozi8bvImiVDY4KhSJtcAnHXZOwf/oK7Z5V35BGlykhdRji0pf2l1YjfCdOTzdoa5soPyfPmbVGvMoIiz3bMzy/pJKjP9UXWliGxqz2FUOev+SAq5fw=="
-    }
-  ]
+  "tasks": []
 }
