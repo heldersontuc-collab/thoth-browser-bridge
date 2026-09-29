@@ -49,20 +49,14 @@ async def call_tool(action: str, args: dict[str, Any]) -> Any:
     if action == "inspect":
         return await api("GET", f"/v1/sessions/{sid}/inspect")
     if action == "extract":
-        mode = quote(str(args.get("mode", "text")))
-        return await api("GET", f"/v1/sessions/{sid}/extract?mode={mode}")
+        mode = str(args.get("mode", "text")).lower()
+        if mode not in {"text", "links"}:
+            raise ValueError("bridge v1 blocks raw HTML extraction because it can expose hidden credentials or tokens")
+        return await api("GET", f"/v1/sessions/{sid}/extract?mode={quote(mode)}")
     if action == "wait":
         return await api("POST", f"/v1/sessions/{sid}/wait", {"milliseconds": int(args.get("milliseconds", 1000))})
     if action == "screenshot":
-        return await api(
-            "POST",
-            f"/v1/sessions/{sid}/screenshot",
-            {
-                "full_page": bool(args.get("full_page", True)),
-                "name": args.get("name"),
-                "include_base64": bool(args.get("include_base64", True)),
-            },
-        )
+        raise ValueError("bridge v1 keeps screenshots human-only until redaction is implemented")
     if action == "tabs":
         return await api("GET", f"/v1/sessions/{sid}/tabs")
     if action == "new_tab":
