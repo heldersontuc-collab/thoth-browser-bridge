@@ -27,7 +27,7 @@ else
 fi
 
 mkdir -p "$DIR/data/keys" "$DIR/data/results"
-chown -R 65532:65532 "$DIR/data"
+chown -R 0:0 "$DIR/data"
 chmod 700 "$DIR/data" "$DIR/data/keys" "$DIR/data/results"
 
 say "Construindo somente o THOTH Browser Bridge"
