@@ -42,3 +42,4 @@ jobs:
         run: |
           bash -n deploy_thoth_web_sprint0.sh
           bash -n publish_thoth_web_sprint0.sh
+          bash -n configure_openai_domain_challenge.sh
