@@ -38,3 +38,5 @@ jobs:
       - name: Build container
         working-directory: thoth_web_mcp
         run: docker compose build mcp
+      - name: Deployment script syntax
+        run: bash -n deploy_thoth_web_sprint0.sh
