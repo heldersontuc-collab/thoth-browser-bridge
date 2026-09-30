@@ -17,9 +17,10 @@ done
 
 printf 'Cole o token de verificacao da OpenAI e pressione Enter: '
 IFS= read -r TOKEN
-TOKEN="${TOKEN//$'\r'/}"
+TOKEN="$(printf '%s' "$TOKEN" | tr -d '\r\n\t ' )"
 [ -n "$TOKEN" ] || fail "token vazio"
-[[ "$TOKEN" =~ ^[A-Za-z0-9_-]{20,200}$ ]] || fail "formato do token inesperado"
+[ "${#TOKEN}" -ge 10 ] || fail "token curto demais"
+[ "${#TOKEN}" -le 500 ] || fail "token longo demais"
 
 say "1/4 - Criando servidor isolado de desafio"
 install -d -m 755 "$DIR"
