@@ -1,0 +1,40 @@
+name: thoth-web-mcp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "thoth_web_mcp/**"
+      - ".github/workflows/thoth-web-mcp.yml"
+  pull_request:
+    paths:
+      - "thoth_web_mcp/**"
+      - ".github/workflows/thoth-web-mcp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        working-directory: thoth_web_mcp
+        run: python -m pip install -r requirements-dev.txt
+      - name: Compile
+        run: python -m compileall -q thoth_web_mcp
+      - name: Unit tests
+        env:
+          PYTHONPATH: .
+        run: pytest -q thoth_web_mcp/tests
+      - name: Compose config
+        working-directory: thoth_web_mcp
+        run: docker compose config >/dev/null
+      - name: Build container
+        working-directory: thoth_web_mcp
+        run: docker compose build mcp
