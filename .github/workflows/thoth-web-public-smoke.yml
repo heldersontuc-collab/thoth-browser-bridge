@@ -1,0 +1,42 @@
+name: thoth-web-public-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/thoth-web-public-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MCP client
+        run: python -m pip install 'mcp>=2,<3'
+      - name: Call THOTH Web through the public HTTPS MCP endpoint
+        run: |
+          python - <<'PY'
+          import anyio
+          from mcp import Client
+
+          URL = "https://thoth-browser-vps.tail819f67.ts.net/mcp"
+
+          async def main():
+              async with Client(URL) as client:
+                  listed = await client.list_tools()
+                  names = [tool.name for tool in listed.tools]
+                  assert names == ["thoth_ping"], names
+                  result = await client.call_tool("thoth_ping", {})
+                  assert result.is_error is False, result
+                  assert result.structured_content["message"] == "PONG", result
+                  print("THOTH_WEB_PUBLIC_MCP_PONG_OK")
+                  print(result.structured_content)
+
+          anyio.run(main)
+          PY
