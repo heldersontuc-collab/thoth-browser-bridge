@@ -1,0 +1,17 @@
+name: thoth-web-mcp
+
+services:
+  mcp:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8810:8810"
+    mem_limit: 128m
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
