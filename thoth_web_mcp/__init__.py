@@ -1,0 +1,1 @@
+"""THOTH Web MCP package."""
