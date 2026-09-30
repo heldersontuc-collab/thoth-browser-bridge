@@ -28,7 +28,7 @@ jobs:
           PYTHONPATH: .
           THOTH_API_KEY: audit-test-key
           BRIDGE_DATA_DIR: /tmp/thoth-bridge-audit
-        run: python -m pytest -q
+        run: python -m pytest -q tests
       - name: Compose config
         env:
           THOTH_API_KEY: audit-test-key
