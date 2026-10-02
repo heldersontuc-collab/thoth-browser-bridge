@@ -259,7 +259,7 @@ jobs:
       - name: Stress concurrent claims and idempotent events
         shell: bash
         run: |
-          THREAD_ID=$(psql -Atc "insert into thoth_mesa.threads(mission_key,subject) values('mission-concurrency-001','concurrency stress') returning id")
+          THREAD_ID=$(psql -qAtc "insert into thoth_mesa.threads(mission_key,subject) values('mission-concurrency-001','concurrency stress') returning id" | head -n1 | tr -d '[:space:]')
           for i in 1 2 3 4 5; do
             psql -v ON_ERROR_STOP=1 -c "insert into thoth_mesa.tasks(thread_id,kind,title,idempotency_key,priority) values('$THREAD_ID','stress','job-$i','stress-task-$i',$i)" >/dev/null
           done
