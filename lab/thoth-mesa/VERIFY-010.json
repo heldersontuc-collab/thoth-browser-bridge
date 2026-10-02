@@ -1,0 +1,23 @@
+{
+  "experiment_id": "THOTH-RESUME-010",
+  "verified_at_utc": "2026-10-02T08:06:46.597262+00:00",
+  "checks": {
+    "status_complete": true,
+    "version_is_2": true,
+    "crash_was_marked": true,
+    "a_executed_exactly_once": true,
+    "b_executed_exactly_once": true,
+    "event_ids_unique": true,
+    "stage_a_not_reexecuted": true,
+    "coordinator_instances_distinct": true,
+    "a_hash_valid": true,
+    "b_hash_valid": true,
+    "b_consumed_exact_a_checkpoint": true,
+    "models_distinct": true,
+    "resume_without_duplicate_proven": true
+  },
+  "stage1_model": "mistral-Nemo-Instruct-2407",
+  "stage2_model": "codestral-latest",
+  "stage1_coordinator_instance": "stage1:36982155131:stage1",
+  "stage2_coordinator_instance": "stage2:36982155131:stage2"
+}
