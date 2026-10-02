@@ -36,6 +36,7 @@ create table if not exists thoth_mesa.models (
 
 create table if not exists thoth_mesa.provider_health (
   id uuid primary key default gen_random_uuid(),
+  seq bigint generated always as identity unique,
   provider_id uuid not null references thoth_mesa.providers(id) on delete restrict,
   model_id uuid references thoth_mesa.models(id) on delete restrict,
   state text not null check (
@@ -193,6 +194,7 @@ begin
         and (ph.model_id=m.id or ph.model_id is null)
       order by
         ph.observed_at desc,
+        ph.seq desc,
         case when ph.model_id=m.id then 0 else 1 end
       limit 1
     ) h on true
