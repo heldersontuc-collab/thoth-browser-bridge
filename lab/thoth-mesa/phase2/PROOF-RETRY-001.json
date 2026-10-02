@@ -1,0 +1,15 @@
+{
+  "proof_id": "THOTH-PHASE2-RETRY-001",
+  "verified_at_utc": "2026-10-02T09:01:43.022964+00:00",
+  "checks": {
+    "message_retry_same_key_same_payload_one_row": true,
+    "message_same_key_different_payload_rejected": true,
+    "invocation_retry_same_key_same_request_one_row": true,
+    "invocation_same_key_different_request_rejected": true,
+    "concurrent_message_retries_collapse": true,
+    "concurrent_invocation_retries_collapse": true
+  },
+  "thoth_web_dependency": false,
+  "vps_dependency": false,
+  "thoth_code_touched": false
+}
