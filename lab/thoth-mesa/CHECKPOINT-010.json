@@ -1,8 +1,8 @@
 {
   "experiment_id": "THOTH-RESUME-010",
   "task_id": "task-thoth-resume-010",
-  "version": 1,
-  "status": "WAITING_REVIEW",
+  "version": 2,
+  "status": "COMPLETE",
   "phase": "communication-only",
   "thoth_web_dependency": false,
   "vps_dependency": false,
@@ -10,9 +10,9 @@
   "crash_marker": true,
   "crash_reason": "SIMULATED_COORDINATOR_TERMINATION_AFTER_DURABLE_CHECKPOINT",
   "stage1_coordinator_instance": "stage1:36982155131:stage1",
-  "stage2_coordinator_instance": null,
+  "stage2_coordinator_instance": "stage2:36982155131:stage2",
   "created_at": "2026-10-02T08:06:26.095909+00:00",
-  "updated_at": "2026-10-02T08:06:26.095909+00:00",
+  "updated_at": "2026-10-02T08:06:37.446681+00:00",
   "message_a_sha256": "f910d3572fa8e621f85b0f6f8b492dade959794ab62bd338ede7c2e197ad0d97",
   "message_a": {
     "requested_model": "mistral-Nemo-Instruct-2407",
@@ -36,6 +36,45 @@
       "response_model": "mistral-Nemo-Instruct-2407",
       "output_sha256": "f910d3572fa8e621f85b0f6f8b492dade959794ab62bd338ede7c2e197ad0d97",
       "timestamp_utc": "2026-10-02T08:06:26.095909+00:00"
+    },
+    {
+      "event_id": "evt-010-B-once",
+      "step": "B",
+      "execution_count": 1,
+      "coordinator_instance": "stage2:36982155131:stage2",
+      "response_model": "codestral-latest",
+      "input_sha256": "f910d3572fa8e621f85b0f6f8b492dade959794ab62bd338ede7c2e197ad0d97",
+      "output_sha256": "f7606a7f764e2d33366f0db2043ceec55a4eec97a052e87e2d0785c4d57c5146",
+      "recovered_after_crash": true,
+      "timestamp_utc": "2026-10-02T08:06:37.446681+00:00"
+    }
+  ],
+  "message_b_sha256": "f7606a7f764e2d33366f0db2043ceec55a4eec97a052e87e2d0785c4d57c5146",
+  "message_b": {
+    "ok": true,
+    "requested_model": "default",
+    "response_model": "codestral-latest",
+    "http_status": 200,
+    "latency_s": 2.287,
+    "text": "ACK THOTH-RESUME-B-10. O novo coordenador deve verificar o estado persistente para confirmar que a etapa A (ID: THOTH-RESUME-A-10) está concluída, usando a regra idempotente: \"Se o ID da etapa anterior estiver presente no estado persistente, pule para a próxima etapa\". A proveniência do estado deve ser validada para garantir integridade. A partir daí, prossiga com a etapa B, garantindo que todas as ações sejam executadas com IDs idempotentes para evitar duplicação.",
+    "usage": {
+      "prompt_tokens": 291,
+      "total_tokens": 414,
+      "completion_tokens": 123,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "resume_input_sha256": "f910d3572fa8e621f85b0f6f8b492dade959794ab62bd338ede7c2e197ad0d97",
+  "recovery_attempts": [
+    {
+      "ok": true,
+      "requested_model": "default",
+      "response_model": "codestral-latest",
+      "http_status": 200,
+      "latency_s": 2.287
     }
   ]
 }
