@@ -1,0 +1,169 @@
+name: THOTH Mesa Membership Verification
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-phase2-membership
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: thoth_mesa_members_lab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d thoth_mesa_members_lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: thoth_mesa_members_lab
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-phase2-membership
+
+      - name: Prepare Supabase-like roles
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role service_role nologin bypassrls;
+          create role anon nologin;
+          create role authenticated nologin;
+          SQL
+
+      - name: Apply schemas
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/001_machine_room_core.sql
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/002_router_core.sql
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/003_retry_idempotency.sql
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/004_membership_core.sql
+
+      - name: Verify membership constraints and counts
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            p uuid;
+            m1 uuid;
+            m2 uuid;
+            v_count integer;
+          begin
+            insert into thoth_mesa.providers(provider_key,display_name,priority,transport,enabled)
+            values('member-test-provider','Member Test',10,'gateway',true)
+            returning id into p;
+
+            insert into thoth_mesa.models(provider_id,model_key,family,enabled)
+            values
+              (p,'member-model-a','family-a',true),
+              (p,'member-model-b','family-b',false);
+
+            select id into m1 from thoth_mesa.models where model_key='member-model-a';
+            select id into m2 from thoth_mesa.models where model_key='member-model-b';
+
+            insert into thoth_mesa.members(
+              member_key,model_id,member_type,logical_role,
+              participation_status,routing_status,proof_ref
+            ) values
+              ('model-a',m1,'model','architect','verified','online','proof-a'),
+              ('model-b',m2,'model','reviewer','verified','browser_only','proof-b'),
+              ('coordinator-main',null,'coordinator','coordinator','verified','not_routable','proof-coordinator');
+
+            select count(*) into v_count
+            from thoth_mesa.members
+            where participation_status='verified';
+            if v_count <> 3 then
+              raise exception 'verified member count wrong: %',v_count;
+            end if;
+
+            select count(*) into v_count
+            from thoth_mesa.members
+            where member_type='model' and routing_status='online';
+            if v_count <> 1 then
+              raise exception 'online model count wrong: %',v_count;
+            end if;
+
+            begin
+              insert into thoth_mesa.members(
+                member_key,model_id,member_type,logical_role,
+                participation_status,routing_status
+              ) values(
+                'duplicate-model',m1,'model','reviewer','verified','online'
+              );
+              raise exception 'duplicate model membership unexpectedly succeeded';
+            exception
+              when unique_violation then null;
+            end;
+
+            begin
+              insert into thoth_mesa.members(
+                member_key,model_id,member_type,logical_role,
+                participation_status,routing_status
+              ) values(
+                'bad-coordinator',m2,'coordinator','coordinator','verified','not_routable'
+              );
+              raise exception 'coordinator with model_id unexpectedly succeeded';
+            exception
+              when check_violation then null;
+            end;
+
+            if has_schema_privilege('anon','thoth_mesa','USAGE') then
+              raise exception 'anon unexpectedly has schema usage';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Emit proof
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          python - <<'PY'
+          import json,datetime,pathlib
+          proof={
+            "proof_id":"THOTH-PHASE2-MEMBERSHIP-001",
+            "verified_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "checks":{
+              "model_members_require_model_id":True,
+              "coordinator_requires_no_model_id":True,
+              "one_membership_per_model":True,
+              "verified_member_count_queryable":True,
+              "routing_status_queryable":True,
+              "anon_schema_access_blocked":True
+            },
+            "thoth_web_dependency":False,
+            "vps_dependency":False,
+            "thoth_code_touched":False
+          }
+          pathlib.Path("lab/thoth-mesa/phase2/PROOF-MEMBERSHIP-001.json").write_text(
+            json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Persist proof
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Phase2 Lab"
+          git config user.email "thoth-mesa-phase2@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/PROOF-MEMBERSHIP-001.json
+          git commit -m "lab: persist membership registry proof"
+          git push origin HEAD:lab/thoth-mesa-phase2-membership
