@@ -32,13 +32,10 @@ set search_path = thoth_mesa, pg_temp
 as $$
 declare
   v_message thoth_mesa.messages;
-  v_hash text;
 begin
   if p_idempotency_key is null or btrim(p_idempotency_key)='' then
     raise exception 'IDEMPOTENCY_KEY_REQUIRED';
   end if;
-
-  v_hash := encode(digest(p_content,'sha256'),'hex');
 
   insert into thoth_mesa.messages(
     thread_id,parent_message_id,invocation_id,position,
@@ -61,7 +58,7 @@ begin
        or v_message.position is distinct from p_position
        or v_message.actor_type is distinct from p_actor_type
        or v_message.actor_id is distinct from p_actor_id
-       or v_message.content_sha256 is distinct from v_hash then
+       or v_message.content is distinct from p_content then
       raise exception 'IDEMPOTENCY_CONFLICT:message:%', p_idempotency_key;
     end if;
   end if;
