@@ -130,6 +130,15 @@ create table if not exists thoth_mesa.events (
   created_at timestamptz not null default now()
 );
 
+alter table thoth_mesa.threads enable row level security;
+alter table thoth_mesa.model_invocations enable row level security;
+alter table thoth_mesa.messages enable row level security;
+alter table thoth_mesa.tasks enable row level security;
+alter table thoth_mesa.checkpoints enable row level security;
+alter table thoth_mesa.decisions enable row level security;
+alter table thoth_mesa.artifacts enable row level security;
+alter table thoth_mesa.events enable row level security;
+
 create index if not exists idx_messages_thread_position
   on thoth_mesa.messages(thread_id, position);
 create index if not exists idx_tasks_claim
@@ -152,7 +161,7 @@ security invoker
 set search_path = thoth_mesa, pg_temp
 as $$
 begin
-  raise exception 'THOTH_MESA_IMMUTABLE:% cannot be %d', tg_table_name, tg_op;
+  raise exception 'THOTH_MESA_IMMUTABLE: % cannot be %', tg_table_name, tg_op;
 end;
 $$;
 
