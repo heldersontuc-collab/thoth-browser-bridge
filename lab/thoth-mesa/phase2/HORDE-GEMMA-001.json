@@ -1,0 +1,76 @@
+{
+  "proof_id": "THOTH-HORDE-GEMMA-001",
+  "verified_at_utc": "2026-10-02T09:27:18.173651+00:00",
+  "model_requested": "google/gemma-4-31b",
+  "credential_used": false,
+  "anonymous_key_used": true,
+  "route_live": false,
+  "thoth_web_dependency": false,
+  "vps_dependency": false,
+  "thoth_code_touched": false,
+  "submit_status": 202,
+  "job_id": "d6b8ea65-8e01-45cb-9bc2-ac00bfb49b2c",
+  "timeout": true,
+  "polls": [
+    {
+      "poll": 1,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 2,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 3,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 4,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 5,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 6,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 7,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 8,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 9,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 10,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 11,
+      "http_status": 200,
+      "ok": true
+    },
+    {
+      "poll": 12,
+      "http_status": 200,
+      "ok": true
+    }
+  ]
+}
