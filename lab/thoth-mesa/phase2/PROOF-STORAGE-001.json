@@ -1,6 +1,6 @@
 {
   "proof_id": "THOTH-PHASE2-STORAGE-001",
-  "verified_at_utc": "2026-10-02T08:34:20.493441+00:00",
+  "verified_at_utc": "2026-10-02T08:36:30.285466+00:00",
   "postgres": "17",
   "checks": {
     "schema_applied": true,
@@ -14,7 +14,9 @@
     "recovered_task_completed": true,
     "service_role_least_privilege": true,
     "anon_has_no_schema_access": true,
-    "authenticated_has_no_schema_access": true
+    "authenticated_has_no_schema_access": true,
+    "ten_workers_five_tasks_no_duplicate_claims": true,
+    "concurrent_same_idempotency_key_one_event": true
   },
   "thoth_web_dependency": false,
   "vps_dependency": false,
