@@ -1,0 +1,341 @@
+name: THOTH Mesa Resume Proof 010
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-resume
+
+permissions:
+  contents: write
+
+jobs:
+  stage1:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-resume
+
+      - name: IA-A create persistent checkpoint
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa
+          cat > /tmp/stage1.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, hashlib, datetime, os, time
+
+          ENDPOINT="https://api.llm7.io/v1/chat/completions"
+          HEADERS={"Content-Type":"application/json","Accept":"application/json","User-Agent":"THOTH-MESA-LAB/1.0"}
+
+          def call(model,prompt):
+              req=urllib.request.Request(
+                  ENDPOINT,
+                  data=json.dumps({
+                      "model":model,
+                      "messages":[{"role":"user","content":prompt}],
+                      "temperature":0.15,
+                      "max_tokens":280,
+                      "stream":False
+                  }).encode(),
+                  headers=HEADERS,
+                  method="POST"
+              )
+              with urllib.request.urlopen(req,timeout=120) as resp:
+                  obj=json.loads(resp.read().decode("utf-8","replace"))
+                  content=obj["choices"][0]["message"]["content"]
+                  if isinstance(content,list):
+                      content="\n".join(str(x.get("text",x)) if isinstance(x,dict) else str(x) for x in content)
+                  return {
+                      "requested_model":model,
+                      "response_model":obj.get("model") or model,
+                      "http_status":resp.status,
+                      "text":str(content).strip(),
+                      "usage":obj.get("usage")
+                  }
+
+          prompt="""ID THOTH-RESUME-A-10. Você é IA-A numa prova de retomada de uma mesa multi-IA.
+          Defina, em no máximo 120 palavras, o estado mínimo persistente necessário para outra IA continuar uma tarefa após a morte do coordenador sem executar novamente uma etapa já concluída.
+          Inclua IDs idempotentes, estado da tarefa e proveniência. Não altere THOTH.
+          Comece exatamente com ACK THOTH-RESUME-A-10."""
+
+          a=call("mistral-Nemo-Instruct-2407",prompt)
+          now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          msg_hash=hashlib.sha256(a["text"].encode()).hexdigest()
+          instance=f"stage1:{os.environ.get('GITHUB_RUN_ID')}:{os.environ.get('GITHUB_JOB')}"
+          state={
+              "experiment_id":"THOTH-RESUME-010",
+              "task_id":"task-thoth-resume-010",
+              "version":1,
+              "status":"WAITING_REVIEW",
+              "phase":"communication-only",
+              "thoth_web_dependency":False,
+              "vps_dependency":False,
+              "stage_a_reexecuted":False,
+              "crash_marker":True,
+              "crash_reason":"SIMULATED_COORDINATOR_TERMINATION_AFTER_DURABLE_CHECKPOINT",
+              "stage1_coordinator_instance":instance,
+              "stage2_coordinator_instance":None,
+              "created_at":now,
+              "updated_at":now,
+              "message_a_sha256":msg_hash,
+              "message_a":a,
+              "events":[
+                  {
+                      "event_id":"evt-010-A-once",
+                      "step":"A",
+                      "execution_count":1,
+                      "coordinator_instance":instance,
+                      "response_model":a["response_model"],
+                      "output_sha256":msg_hash,
+                      "timestamp_utc":now
+                  }
+              ]
+          }
+          pathlib.Path("lab/thoth-mesa/CHECKPOINT-010.json").write_text(
+              json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps({"checkpoint_written":True,"model":a["response_model"],"hash":msg_hash,"instance":instance},ensure_ascii=False))
+          PY
+          python /tmp/stage1.py
+
+      - name: Commit durable checkpoint before coordinator loss
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Resume Lab"
+          git config user.email "thoth-mesa-resume@users.noreply.github.com"
+          git add lab/thoth-mesa/CHECKPOINT-010.json
+          git commit -m "lab: proof010 persist stage A checkpoint before crash"
+          git push origin HEAD:lab/thoth-mesa-resume
+
+      - name: Simulate coordinator termination
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "SIMULATED_COORDINATOR_TERMINATION_AFTER_DURABLE_CHECKPOINT"
+          exit 42
+
+  stage2:
+    needs: stage1
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-resume
+          fetch-depth: 0
+
+      - name: Fresh coordinator resumes only from checkpoint
+        shell: bash
+        run: |
+          cat > /tmp/stage2.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, hashlib, datetime, os, time
+
+          path=pathlib.Path("lab/thoth-mesa/CHECKPOINT-010.json")
+          state=json.loads(path.read_text(encoding="utf-8"))
+
+          assert state["experiment_id"]=="THOTH-RESUME-010"
+          assert state["version"]==1
+          assert state["status"]=="WAITING_REVIEW"
+          assert state["crash_marker"] is True
+          assert state["stage_a_reexecuted"] is False
+          assert sum(1 for e in state["events"] if e["step"]=="A")==1
+          assert sum(1 for e in state["events"] if e["step"]=="B")==0
+
+          a_text=state["message_a"]["text"]
+          assert hashlib.sha256(a_text.encode()).hexdigest()==state["message_a_sha256"]
+
+          ENDPOINT="https://api.llm7.io/v1/chat/completions"
+          HEADERS={"Content-Type":"application/json","Accept":"application/json","User-Agent":"THOTH-MESA-LAB/1.0"}
+
+          def call(model,prompt):
+              req=urllib.request.Request(
+                  ENDPOINT,
+                  data=json.dumps({
+                      "model":model,
+                      "messages":[{"role":"user","content":prompt}],
+                      "temperature":0.15,
+                      "max_tokens":300,
+                      "stream":False
+                  }).encode(),
+                  headers=HEADERS,
+                  method="POST"
+              )
+              start=time.time()
+              try:
+                  with urllib.request.urlopen(req,timeout=120) as resp:
+                      obj=json.loads(resp.read().decode("utf-8","replace"))
+                      content=obj["choices"][0]["message"]["content"]
+                      if isinstance(content,list):
+                          content="\n".join(str(x.get("text",x)) if isinstance(x,dict) else str(x) for x in content)
+                      return {
+                          "ok":True,
+                          "requested_model":model,
+                          "response_model":obj.get("model") or model,
+                          "http_status":resp.status,
+                          "latency_s":round(time.time()-start,3),
+                          "text":str(content).strip(),
+                          "usage":obj.get("usage")
+                      }
+              except urllib.error.HTTPError as e:
+                  raw=e.read().decode("utf-8","replace")
+                  retry_after=None
+                  try: retry_after=json.loads(raw).get("error",{}).get("retry_after")
+                  except Exception: pass
+                  return {"ok":False,"requested_model":model,"http_status":e.code,"error":raw[:2000],"retry_after":retry_after}
+              except Exception as e:
+                  return {"ok":False,"requested_model":model,"http_status":0,"error":repr(e)}
+
+          prompt=f"""ID THOTH-RESUME-B-10. Você é IA-B e está assumindo uma tarefa após a interrupção do coordenador anterior.
+          Você só recebeu o checkpoint persistido. A etapa A JÁ FOI CONCLUÍDA e NÃO deve ser refeita.
+
+          --- SAÍDA EXATA DA ETAPA A ---
+          {a_text}
+          --- FIM DA ETAPA A ---
+
+          Revise essa proposta e diga, em até 130 palavras, como o novo coordenador deve retomar exatamente da próxima etapa sem duplicar A. Inclua uma regra idempotente verificável. Não altere THOTH.
+          Comece exatamente com ACK THOTH-RESUME-B-10."""
+
+          a_model=state["message_a"]["response_model"]
+          b=None
+          attempts=[]
+          for model in ["default","codestral-latest","DeepSeek-V4-Flash-0731"]:
+              r=call(model,prompt)
+              attempts.append({k:v for k,v in r.items() if k not in ("text","usage")})
+              if r.get("ok") and r.get("text") and r.get("response_model")!=a_model:
+                  b=r
+                  break
+              wait=r.get("retry_after")
+              time.sleep(min(int(wait)+2,60) if wait else 8)
+
+          if not b:
+              raise SystemExit("Could not obtain distinct recovery IA-B: "+json.dumps(attempts,ensure_ascii=False))
+
+          now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          b_hash=hashlib.sha256(b["text"].encode()).hexdigest()
+          instance=f"stage2:{os.environ.get('GITHUB_RUN_ID')}:{os.environ.get('GITHUB_JOB')}"
+
+          state["version"]=2
+          state["status"]="COMPLETE"
+          state["updated_at"]=now
+          state["stage2_coordinator_instance"]=instance
+          state["stage_a_reexecuted"]=False
+          state["message_b_sha256"]=b_hash
+          state["message_b"]=b
+          state["resume_input_sha256"]=state["message_a_sha256"]
+          state["events"].append({
+              "event_id":"evt-010-B-once",
+              "step":"B",
+              "execution_count":1,
+              "coordinator_instance":instance,
+              "response_model":b["response_model"],
+              "input_sha256":state["message_a_sha256"],
+              "output_sha256":b_hash,
+              "recovered_after_crash":True,
+              "timestamp_utc":now
+          })
+          state["recovery_attempts"]=attempts
+          path.write_text(json.dumps(state,ensure_ascii=False,indent=2),encoding="utf-8")
+          print(json.dumps({"resumed":True,"model":b["response_model"],"stage1_model":a_model,"stage_a_reexecuted":False},ensure_ascii=False))
+          PY
+          python /tmp/stage2.py
+
+      - name: Commit recovery result from fresh runner
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Resume Lab"
+          git config user.email "thoth-mesa-resume@users.noreply.github.com"
+          git add lab/thoth-mesa/CHECKPOINT-010.json
+          git commit -m "lab: proof010 resume from checkpoint without replaying A"
+          git push origin HEAD:lab/thoth-mesa-resume
+
+  verify:
+    needs: stage2
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-resume
+          fetch-depth: 0
+
+      - name: Independent verifier checks no duplicate execution
+        shell: bash
+        run: |
+          cat > /tmp/verify.py <<'PY'
+          import json, pathlib, hashlib, datetime
+
+          path=pathlib.Path("lab/thoth-mesa/CHECKPOINT-010.json")
+          s=json.loads(path.read_text(encoding="utf-8"))
+          events=s["events"]
+          a_events=[e for e in events if e["step"]=="A"]
+          b_events=[e for e in events if e["step"]=="B"]
+          event_ids=[e["event_id"] for e in events]
+
+          checks={
+              "status_complete":s["status"]=="COMPLETE",
+              "version_is_2":s["version"]==2,
+              "crash_was_marked":s["crash_marker"] is True,
+              "a_executed_exactly_once":len(a_events)==1 and a_events[0]["execution_count"]==1,
+              "b_executed_exactly_once":len(b_events)==1 and b_events[0]["execution_count"]==1,
+              "event_ids_unique":len(event_ids)==len(set(event_ids)),
+              "stage_a_not_reexecuted":s["stage_a_reexecuted"] is False,
+              "coordinator_instances_distinct":s["stage1_coordinator_instance"]!=s["stage2_coordinator_instance"],
+              "a_hash_valid":hashlib.sha256(s["message_a"]["text"].encode()).hexdigest()==s["message_a_sha256"],
+              "b_hash_valid":hashlib.sha256(s["message_b"]["text"].encode()).hexdigest()==s["message_b_sha256"],
+              "b_consumed_exact_a_checkpoint":b_events[0]["input_sha256"]==s["message_a_sha256"]==s["resume_input_sha256"],
+              "models_distinct":s["message_a"]["response_model"]!=s["message_b"]["response_model"],
+          }
+          checks["resume_without_duplicate_proven"]=all(checks.values())
+          if not checks["resume_without_duplicate_proven"]:
+              raise SystemExit("VERIFY FAILED: "+json.dumps(checks,ensure_ascii=False))
+
+          now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          proof={
+              "experiment_id":"THOTH-RESUME-010",
+              "verified_at_utc":now,
+              "checks":checks,
+              "stage1_model":s["message_a"]["response_model"],
+              "stage2_model":s["message_b"]["response_model"],
+              "stage1_coordinator_instance":s["stage1_coordinator_instance"],
+              "stage2_coordinator_instance":s["stage2_coordinator_instance"],
+          }
+          pathlib.Path("lab/thoth-mesa/VERIFY-010.json").write_text(json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8")
+          md=f"""# THOTH Resume Proof 010
+
+          **Verified UTC:** {now}
+          **THOTH WEB dependency:** NO
+          **VPS dependency:** NO
+          **THOTH code touched:** NO
+
+          Stage 1 model: `{proof['stage1_model']}`
+          Stage 2 model: `{proof['stage2_model']}`
+
+          Stage 1 coordinator: `{proof['stage1_coordinator_instance']}`
+          Stage 2 coordinator: `{proof['stage2_coordinator_instance']}`
+
+          ## Checks
+          - Crash marker persisted: **{checks['crash_was_marked']}**
+          - A executed exactly once: **{checks['a_executed_exactly_once']}**
+          - B executed exactly once: **{checks['b_executed_exactly_once']}**
+          - Unique event IDs: **{checks['event_ids_unique']}**
+          - Stage A was not replayed: **{checks['stage_a_not_reexecuted']}**
+          - Different coordinator instances: **{checks['coordinator_instances_distinct']}**
+          - A hash valid: **{checks['a_hash_valid']}**
+          - B consumed exact A checkpoint: **{checks['b_consumed_exact_a_checkpoint']}**
+          - Models distinct: **{checks['models_distinct']}**
+          - Resume without duplicate proven: **{checks['resume_without_duplicate_proven']}**
+          """
+          pathlib.Path("lab/thoth-mesa/PROOF-010.md").write_text(md,encoding="utf-8")
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/verify.py
+
+      - name: Persist independent verification
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Resume Lab"
+          git config user.email "thoth-mesa-resume@users.noreply.github.com"
+          git add lab/thoth-mesa/VERIFY-010.json lab/thoth-mesa/PROOF-010.md
+          git commit -m "lab: proof010 verify crash recovery without duplicate"
+          git push origin HEAD:lab/thoth-mesa-resume
