@@ -1,0 +1,32 @@
+{
+  "proof_id": "THOTH-ROUTE-DISCOVERY-001",
+  "verified_at_utc": "2026-10-02T09:20:48.782637+00:00",
+  "credential_used": false,
+  "results": [
+    {
+      "route": "opencode-zen",
+      "model": "deepseek-v4-flash-free",
+      "http_status": 400,
+      "success": false,
+      "error": "{\"error\":{\"type\":\"server_error\",\"message\":\"Error from provider (Console): Upstream request failed: Model is unavailable.\"}}"
+    },
+    {
+      "route": "opencode-zen",
+      "model": "nemotron-3-ultra-free",
+      "http_status": 403,
+      "success": false,
+      "error": "{\"type\":\"error\",\"error\":{\"type\":\"FreeTierError\",\"message\":\"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode\"}}"
+    },
+    {
+      "route": "opencode-zen",
+      "model": "qwen3.8-flash",
+      "http_status": 401,
+      "success": false,
+      "error": "{\"type\":\"error\",\"error\":{\"type\":\"AuthError\",\"message\":\"Missing API key.\"}}"
+    }
+  ],
+  "any_route_live": false,
+  "thoth_web_dependency": false,
+  "vps_dependency": false,
+  "thoth_code_touched": false
+}
