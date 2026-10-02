@@ -75,12 +75,12 @@ jobs:
               print(json.dumps({"phase":phase,"attempt":compact},ensure_ascii=False),flush=True)
 
           attempts=[]
-          prompt_a="""ID THOTH-EXT-A-07. Você é IA-A numa conversa técnica entre IAs.
+          prompt_a="""ID THOTH-EXT-A-08. Você é IA-A numa conversa técnica entre IAs.
           Estamos projetando uma sala externa persistente para várias IAs colaborarem. THOTH WEB deve ser apenas ferramenta auxiliar, nunca caminho crítico. A VPS atual não deve carregar inferência pesada nem o histórico principal.
           Requisitos: memória com proveniência, tarefas com estados explícitos, auditoria, retomada sem duplicação, limites de custo/rate, visibilidade humana e nenhuma escrita direta em produção.
           Fase atual: arquitetura da sala apenas. Não altere o THOTH.
           Proponha a MENOR arquitetura viável e a falha mais importante a testar primeiro.
-          Responda em português, até 160 palavras, começando exatamente com ACK THOTH-EXT-A-07."""
+          Responda em português, até 160 palavras, começando exatamente com ACK THOTH-EXT-A-08."""
 
           a=None
           for selector in ["default","fast","default"]:
@@ -92,17 +92,17 @@ jobs:
               pathlib.Path("lab/thoth-mesa/routed-failure.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
               raise SystemExit("IA-A routed call failed")
 
-          prompt_b=f"""ID THOTH-EXT-B-07. Você é IA-B, outra IA revisora. A IA-A acabou de responder:
+          prompt_b=f"""ID THOTH-EXT-B-08. Você é IA-B, outra IA revisora. A IA-A acabou de responder:
 
           --- RESPOSTA EXATA DA IA-A ({a['response_model']}) ---
           {a['text']}
           --- FIM DA IA-A ---
 
           Responda DIRETAMENTE ao que ela propôs. Diga 1 ponto que manteria, 1 que mudaria e proponha UM teste falsificável de retomada após queda do coordenador sem duplicar tarefas. THOTH WEB deve permanecer fora do caminho crítico. Não altere THOTH.
-          Responda em português, até 160 palavras, começando exatamente com ACK THOTH-EXT-B-07."""
+          Responda em português, até 160 palavras, começando exatamente com ACK THOTH-EXT-B-08."""
 
           b=None
-          for selector in ["fast","default","fast","default","fast"]:
+          for selector in ["gemini-3.7-flash","mistral-Nemo-Instruct-2407","DeepSeek-V4-Flash-0731"]:
               time.sleep(2)
               r=call(selector,prompt_b); log_attempt("B",r,attempts)
               if not (r.get("ok") and r.get("text") and r.get("response_model")):
@@ -115,7 +115,7 @@ jobs:
               pathlib.Path("lab/thoth-mesa/routed-failure.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
               raise SystemExit("Could not obtain IA-B from a distinct response_model")
 
-          prompt_c=f"""ID THOTH-EXT-C-07. Você é IA-C, terceira revisora.
+          prompt_c=f"""ID THOTH-EXT-C-08. Você é IA-C, terceira revisora.
 
           IA-A ({a['response_model']}):
           --- A ---
@@ -128,7 +128,7 @@ jobs:
           --- FIM B ---
 
           Sintetize o diálogo: 1 consenso, 1 discordância útil e UMA decisão mínima para a próxima etapa da sala. Não altere THOTH.
-          Responda em português, até 140 palavras, começando exatamente com ACK THOTH-EXT-C-07."""
+          Responda em português, até 140 palavras, começando exatamente com ACK THOTH-EXT-C-08."""
 
           c=None
           for selector in ["default","fast","default"]:
@@ -146,13 +146,13 @@ jobs:
               "a_b_response_models_distinct":a["response_model"]!=b["response_model"],
               "c_received_a_and_b_verbatim":bool(c) and a["text"] in prompt_c and b["text"] in prompt_c,
               "three_response_models_distinct":bool(c) and len({a["response_model"],b["response_model"],c["response_model"]})==3,
-              "ack_a":a["text"].startswith("ACK THOTH-EXT-A-07"),
-              "ack_b":b["text"].startswith("ACK THOTH-EXT-B-07"),
-              "ack_c":bool(c) and c["text"].startswith("ACK THOTH-EXT-C-07"),
+              "ack_a":a["text"].startswith("ACK THOTH-EXT-A-08"),
+              "ack_b":b["text"].startswith("ACK THOTH-EXT-B-08"),
+              "ack_c":bool(c) and c["text"].startswith("ACK THOTH-EXT-C-08"),
               "minimum_external_dialogue_proven": bool(a["text"] and b["text"] and a["text"] in prompt_b and a["response_model"]!=b["response_model"]),
           }
           transcript={
-              "experiment_id":"THOTH-NEW-POINT-007",
+              "experiment_id":"THOTH-NEW-POINT-008",
               "timestamp_utc":now,
               "transport":"GitHub Actions hosted runner -> LLM7 anonymous dynamic router",
               "endpoint":"api.llm7.io",
@@ -165,7 +165,7 @@ jobs:
               "checks":checks,
               "attempts":attempts,
           }
-          pathlib.Path("lab/thoth-mesa/transcript-routed-007.json").write_text(
+          pathlib.Path("lab/thoth-mesa/transcript-routed-008.json").write_text(
               json.dumps(transcript,ensure_ascii=False,indent=2),encoding="utf-8"
           )
 
@@ -180,7 +180,7 @@ jobs:
           {c['text']}
           """
 
-          md=f"""# THOTH Multi-AI External Dialogue — Proof 007
+          md=f"""# THOTH Multi-AI External Dialogue — Proof 008
 
           **UTC:** {now}
           **Transport:** GitHub Actions hosted runner → anonymous dynamic LLM router
@@ -213,7 +213,7 @@ jobs:
           - C ACK: **{checks['ack_c']}**
           - Minimum external dialogue proven: **{checks['minimum_external_dialogue_proven']}**
           """
-          pathlib.Path("lab/thoth-mesa/PROOF-007.md").write_text(md,encoding="utf-8")
+          pathlib.Path("lab/thoth-mesa/PROOF-008.md").write_text(md,encoding="utf-8")
           print("\nFINAL_PROOF\n"+json.dumps(transcript,ensure_ascii=False,indent=2),flush=True)
           PY
           python /tmp/routed_dialogue.py
