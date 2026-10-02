@@ -1,0 +1,18 @@
+{
+  "proof_id": "THOTH-PHASE2-ROUTER-001",
+  "verified_at_utc": "2026-10-02T08:53:36.172950+00:00",
+  "checks": {
+    "healthy_primary_selected": true,
+    "rate_limited_primary_falls_back": true,
+    "fallback_index_records_skipped_preference": true,
+    "quota_exhausted_model_skipped": true,
+    "all_unhealthy_blocks_instead_of_faking": true,
+    "budget_exhaustion_blocks_route": true,
+    "routing_decision_idempotent": true,
+    "expired_cooldown_reenables_model": true,
+    "family_pinning_respected": true
+  },
+  "thoth_web_dependency": false,
+  "vps_dependency": false,
+  "thoth_code_touched": false
+}
