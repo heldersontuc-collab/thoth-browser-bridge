@@ -1,0 +1,140 @@
+name: THOTH Mesa Horde Gemma Probe
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-horde-gemma
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-horde-gemma
+
+      - name: Probe Gemma 4 31B through AI Horde
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          cat > /tmp/probe.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, datetime, time
+
+          BASE="https://aihorde.net/api/v2"
+          MODEL="google/gemma-4-31b"
+          HEADERS={
+            "Accept":"application/json",
+            "User-Agent":"THOTH-MESA-HORDE/1.0",
+            "Client-Agent":"THOTH-MESA:1.0:github-actions"
+          }
+
+          def req_json(url, method="GET", payload=None, timeout=30, extra=None):
+            headers=dict(HEADERS)
+            if extra: headers.update(extra)
+            data=None
+            if payload is not None:
+              headers["Content-Type"]="application/json"
+              data=json.dumps(payload).encode("utf-8")
+            req=urllib.request.Request(url,data=data,headers=headers,method=method)
+            try:
+              with urllib.request.urlopen(req,timeout=timeout) as resp:
+                raw=resp.read().decode("utf-8","replace")
+                return {"ok":True,"status":resp.status,"json":json.loads(raw)}
+            except urllib.error.HTTPError as e:
+              raw=e.read().decode("utf-8","replace")
+              try: body=json.loads(raw)
+              except Exception: body={"raw":raw[:1200]}
+              return {"ok":False,"status":e.code,"json":body}
+            except Exception as e:
+              return {"ok":False,"status":0,"json":{"error":repr(e)}}
+
+          proof={
+            "proof_id":"THOTH-HORDE-GEMMA-001",
+            "verified_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "model_requested":MODEL,
+            "credential_used":False,
+            "anonymous_key_used":True,
+            "route_live":False,
+            "thoth_web_dependency":False,
+            "vps_dependency":False,
+            "thoth_code_touched":False
+          }
+
+          submit=req_json(
+            BASE+"/generate/async",
+            "POST",
+            {
+              "prompt":"user: ID THOTH-HORDE-GEMMA-001. Responda exatamente em português: ACK THOTH-HORDE-GEMMA-001",
+              "models":[MODEL],
+              "params":{
+                "n":1,
+                "max_length":96,
+                "max_context_length":1024,
+                "temperature":0.1
+              },
+              "slow_workers":True
+            },
+            timeout=30,
+            extra={"apikey":"0000000000"}
+          )
+          proof["submit_status"]=submit.get("status")
+
+          if submit["ok"] and submit["json"].get("id"):
+            job_id=submit["json"]["id"]
+            proof["job_id"]=job_id
+            polls=[]
+            for i in range(12):
+              time.sleep(7)
+              st=req_json(BASE+f"/generate/status/{job_id}",extra={"apikey":"0000000000"})
+              polls.append({"poll":i+1,"http_status":st.get("status"),"ok":st.get("ok")})
+              if not st["ok"]:
+                if st.get("status")==429:
+                  continue
+                proof["status_error"]=st["json"]
+                break
+              data=st["json"]
+              if data.get("faulted"):
+                proof["faulted"]=data
+                break
+              if data.get("done"):
+                gens=data.get("generations") or []
+                if gens:
+                  g=gens[0]
+                  text=(g.get("text") or "").strip()
+                  proof["generation"]={
+                    "text":text,
+                    "model":g.get("model") or MODEL,
+                    "worker_id":g.get("worker_id"),
+                    "worker_name":g.get("worker_name"),
+                    "state":g.get("state")
+                  }
+                  proof["route_live"]=bool(text)
+                else:
+                  proof["generation"]={"done":True,"no_generation":True}
+                break
+            else:
+              proof["timeout"]=True
+            proof["polls"]=polls
+          else:
+            proof["submit_error"]=submit["json"]
+
+          pathlib.Path("lab/thoth-mesa/phase2/HORDE-GEMMA-001.json").write_text(
+            json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/probe.py
+
+      - name: Persist proof
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Horde Lab"
+          git config user.email "thoth-mesa-horde@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/HORDE-GEMMA-001.json
+          git commit -m "lab: persist Gemma AI Horde route proof"
+          git push origin HEAD:lab/thoth-mesa-horde-gemma
