@@ -1,0 +1,41 @@
+{
+  "experiment_id": "THOTH-RESUME-010",
+  "task_id": "task-thoth-resume-010",
+  "version": 1,
+  "status": "WAITING_REVIEW",
+  "phase": "communication-only",
+  "thoth_web_dependency": false,
+  "vps_dependency": false,
+  "stage_a_reexecuted": false,
+  "crash_marker": true,
+  "crash_reason": "SIMULATED_COORDINATOR_TERMINATION_AFTER_DURABLE_CHECKPOINT",
+  "stage1_coordinator_instance": "stage1:36982155131:stage1",
+  "stage2_coordinator_instance": null,
+  "created_at": "2026-10-02T08:06:26.095909+00:00",
+  "updated_at": "2026-10-02T08:06:26.095909+00:00",
+  "message_a_sha256": "f910d3572fa8e621f85b0f6f8b492dade959794ab62bd338ede7c2e197ad0d97",
+  "message_a": {
+    "requested_model": "mistral-Nemo-Instruct-2407",
+    "response_model": "mistral-Nemo-Instruct-2407",
+    "http_status": 200,
+    "text": "ACK THOTH-RESUME-A-10. O estado mínimo persistente necessário para outra IA continuar uma tarefa após a morte do coordenador sem executar novamente uma etapa já concluída consiste em IDs idempotentes, estado da tarefa e proveniência. Os IDs idempotentes garantem que uma ação pode ser executada várias vezes sem produzir efeitos colaterais indesejados. O estado da tarefa deve incluir todas as informações necessárias para entender onde a tarefa está no momento, incluindo as etapas já concluídas. A proveniência é importante para garantir que as informações sejam confiáveis e venham de uma fonte conhecida.",
+    "usage": {
+      "prompt_tokens": 112,
+      "total_tokens": 249,
+      "completion_tokens": 137,
+      "estimated_cost": 6.238e-06,
+      "prompt_tokens_details": null
+    }
+  },
+  "events": [
+    {
+      "event_id": "evt-010-A-once",
+      "step": "A",
+      "execution_count": 1,
+      "coordinator_instance": "stage1:36982155131:stage1",
+      "response_model": "mistral-Nemo-Instruct-2407",
+      "output_sha256": "f910d3572fa8e621f85b0f6f8b492dade959794ab62bd338ede7c2e197ad0d97",
+      "timestamp_utc": "2026-10-02T08:06:26.095909+00:00"
+    }
+  ]
+}
