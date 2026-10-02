@@ -12,213 +12,226 @@ jobs:
   dialogue:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: lab/thoth-mesa-llmfaucet
 
-      - name: Run real multi-model dialogue through keyless external gateway
+      - name: Run real multi-model dialogue on AI Horde
         shell: bash
         run: |
           mkdir -p lab/thoth-mesa
           cat > /tmp/dialogue.py <<'PY'
           import json, urllib.request, urllib.error, datetime, pathlib, time
 
-          BASE = "https://api.llmfaucet.dev/v1"
-          HEADERS = {
-              "Authorization": "Bearer free",
-              "Content-Type": "application/json",
-              "User-Agent": "THOTH-MESA-LAB/0.1"
+          BASE = "https://aihorde.net/api/v2"
+          COMMON = {
+              "Client-Agent": "THOTH-MESA-LAB:0.2:github-actions",
+              "Accept": "application/json",
+              "User-Agent": "THOTH-MESA-LAB/0.2",
           }
+          ANON_KEY = "0000000000"
 
-          def request_json(url, method="GET", payload=None, timeout=120):
-              data = None if payload is None else json.dumps(payload).encode("utf-8")
-              req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
+          def http_json(url, method="GET", payload=None, timeout=60, extra_headers=None):
+              headers = dict(COMMON)
+              if extra_headers:
+                  headers.update(extra_headers)
+              data = None
+              if payload is not None:
+                  headers["Content-Type"] = "application/json"
+                  data = json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
               try:
                   with urllib.request.urlopen(req, timeout=timeout) as resp:
                       raw = resp.read().decode("utf-8", "replace")
-                      return {
-                          "ok": True,
-                          "status": resp.status,
-                          "headers": {k.lower(): v for k, v in resp.headers.items()},
-                          "json": json.loads(raw)
-                      }
+                      return {"ok": True, "status": resp.status, "json": json.loads(raw), "headers": dict(resp.headers.items())}
               except urllib.error.HTTPError as e:
                   raw = e.read().decode("utf-8", "replace")
-                  try:
-                      body = json.loads(raw)
-                  except Exception:
-                      body = {"raw": raw}
-                  return {"ok": False, "status": e.code, "headers": dict(e.headers.items()), "json": body}
+                  try: body = json.loads(raw)
+                  except Exception: body = {"raw": raw}
+                  return {"ok": False, "status": e.code, "json": body, "headers": dict(e.headers.items())}
               except Exception as e:
-                  return {"ok": False, "status": 0, "headers": {}, "json": {"error": repr(e)}}
+                  return {"ok": False, "status": 0, "json": {"error": repr(e)}, "headers": {}}
 
-          models_resp = request_json(BASE + "/models")
-          if not models_resp["ok"]:
-              raise SystemExit("models endpoint failed: " + json.dumps(models_resp, ensure_ascii=False))
+          def active_models():
+              r = http_json(BASE + "/status/models?type=text")
+              if not r["ok"]:
+                  raise RuntimeError("model status failed: " + json.dumps(r, ensure_ascii=False))
+              rows = r["json"] if isinstance(r["json"], list) else r["json"].get("models", [])
+              cleaned = []
+              for x in rows:
+                  name = x.get("name") or x.get("model")
+                  count = x.get("count", 0) or 0
+                  queued = x.get("queued", 0) or 0
+                  jobs = x.get("jobs", 0) or 0
+                  performance = x.get("performance", 0) or 0
+                  if name and count > 0:
+                      cleaned.append({"name": str(name), "count": count, "queued": queued, "jobs": jobs, "performance": performance})
+              cleaned.sort(key=lambda x: (-x["count"], x["queued"], -x["performance"]))
+              return cleaned
 
-          models = models_resp["json"].get("data", [])
-          snapshot = []
-          seen_provider = set()
-          candidates = []
-          for m in models:
-              mid = str(m.get("id", ""))
-              if not mid or mid.startswith("auto"):
-                  continue
-              provider = str(m.get("owned_by") or m.get("provider") or mid.split("/", 1)[0])
-              snapshot.append({
-                  "id": mid,
-                  "provider": provider,
-                  "capabilities": m.get("capabilities")
-              })
-              if provider not in seen_provider:
-                  seen_provider.add(provider)
-                  candidates.append((mid, provider))
+          def generate(model, prompt, max_length=360):
+              submit = http_json(
+                  BASE + "/generate/async",
+                  "POST",
+                  {
+                      "prompt": prompt,
+                      "models": [model],
+                      "params": {
+                          "n": 1,
+                          "max_length": max_length,
+                          "max_context_length": 4096,
+                          "temperature": 0.25,
+                          "top_p": 0.9,
+                      },
+                      "slow_workers": True,
+                  },
+                  extra_headers={"apikey": ANON_KEY},
+              )
+              if not submit["ok"] or not submit["json"].get("id"):
+                  return None, {"submit": submit}
+              job_id = submit["json"]["id"]
+              trace = {"job_id": job_id, "submit": {"status": submit["status"]}}
+              for i in range(150):
+                  time.sleep(2)
+                  status = http_json(BASE + f"/generate/status/{job_id}", extra_headers={"apikey": ANON_KEY})
+                  if not status["ok"]:
+                      trace["last_status"] = status
+                      continue
+                  data = status["json"]
+                  if data.get("faulted"):
+                      trace["last_status"] = data
+                      return None, trace
+                  if data.get("done"):
+                      gens = data.get("generations") or []
+                      if not gens:
+                          trace["last_status"] = data
+                          return None, trace
+                      g = gens[0]
+                      result = {
+                          "requested_model": model,
+                          "actual_model": g.get("model") or model,
+                          "worker_id": g.get("worker_id"),
+                          "worker_name": g.get("worker_name"),
+                          "text": (g.get("text") or "").strip(),
+                          "job_id": job_id,
+                          "seed": g.get("seed"),
+                          "state": g.get("state"),
+                      }
+                      trace["polls"] = i + 1
+                      return result, trace
+              trace["error"] = "timeout"
+              return None, trace
 
-          pathlib.Path("lab/thoth-mesa/models-snapshot.json").write_text(
-              json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8"
+          models = active_models()
+          pathlib.Path("lab/thoth-mesa/aihorde-models-snapshot.json").write_text(
+              json.dumps(models, ensure_ascii=False, indent=2), encoding="utf-8"
           )
+          if len(models) < 2:
+              raise SystemExit("Need at least 2 active text models; got " + str(len(models)))
 
-          prompt_a = """ID THOTH-EXT-A-01. Você é IA-A em um diálogo de engenharia entre modelos diferentes.
-          Estamos projetando uma sala externa e persistente para várias IAs colaborarem. O THOTH WEB NÃO pode ser dependência do canal; deve ser apenas uma ferramenta auxiliar de acesso. Armazenamento pesado e inferência devem ficar fora da VPS atual.
-          Requisitos: proveniência persistente, estado de tarefas, auditoria, retomada segura, limites de custo/rate, visibilidade humana e nenhum agente escrevendo em produção.
+          prompt_a = """ID THOTH-EXT-A-02. Você é IA-A em um diálogo de engenharia entre modelos diferentes.
+          Estamos projetando uma sala externa e persistente para várias IAs colaborarem. THOTH WEB NÃO pode ser dependência do canal; deve ser apenas ferramenta auxiliar de acesso. Armazenamento pesado e inferência devem ficar fora da VPS atual.
+          Requisitos: proveniência persistente, estado explícito de tarefas, auditoria, retomada segura, limites de custo/rate, visibilidade humana e nenhum agente escrevendo em produção.
           Fase atual: discutir a arquitetura da sala, sem alterar o THOTH.
           Proponha a MENOR arquitetura viável e identifique a falha mais importante a testar primeiro.
-          Responda em português, até 220 palavras, começando exatamente com ACK THOTH-EXT-A-01."""
+          Responda em português, até 180 palavras, começando exatamente com ACK THOTH-EXT-A-02."""
 
-          def call_model(model, prompt):
-              r = request_json(BASE + "/chat/completions", "POST", {
-                  "model": model,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "temperature": 0.2,
-                  "max_tokens": 420,
-                  "stream": False
-              })
-              if not r["ok"]:
-                  return None, r
-              j = r["json"]
-              try:
-                  text = j["choices"][0]["message"]["content"]
-              except Exception:
-                  return None, r
-              return {
-                  "requested_model": model,
-                  "response_model": j.get("model"),
-                  "routed_via": r["headers"].get("x-routed-via"),
-                  "fallback_attempts": r["headers"].get("x-fallback-attempts"),
-                  "text": text,
-                  "usage": j.get("usage")
-              }, r
-
-          a = None
-          a_raw = None
           attempts = []
-          for model, provider in candidates[:10]:
-              result, raw = call_model(model, prompt_a)
-              attempts.append({"phase": "A", "model": model, "catalog_provider": provider, "ok": bool(result), "status": raw.get("status")})
-              if result:
-                  a, a_raw = result, raw
+          a = None
+          for entry in models[:12]:
+              res, trace = generate(entry["name"], prompt_a)
+              attempts.append({"phase":"A","model":entry["name"],"success":bool(res),"trace":trace})
+              if res and res.get("text"):
+                  a = res
                   break
-              time.sleep(1)
-
           if not a:
-              # Last-resort routed selector.
-              result, raw = call_model("auto:smart", prompt_a)
-              attempts.append({"phase": "A", "model": "auto:smart", "ok": bool(result), "status": raw.get("status")})
-              if not result:
-                  raise SystemExit("IA-A failed: " + json.dumps(attempts, ensure_ascii=False))
-              a, a_raw = result, raw
+              pathlib.Path("lab/thoth-mesa/failed-attempts.json").write_text(json.dumps(attempts, ensure_ascii=False, indent=2), encoding="utf-8")
+              raise SystemExit("IA-A failed across active models")
 
-          prompt_b = f"""ID THOTH-EXT-B-01. Você é IA-B, revisor independente em um diálogo real entre modelos.
-          A IA-A acabou de propor o seguinte:
+          prompt_b = f"""ID THOTH-EXT-B-02. Você é IA-B, um revisor independente em um diálogo REAL entre dois modelos.
+          A IA-A respondeu:
 
-          --- MENSAGEM DA IA-A ---
+          --- MENSAGEM EXATA DA IA-A ---
           {a['text']}
           --- FIM DA MENSAGEM DA IA-A ---
 
-          Responda DIRETAMENTE à proposta da IA-A. Aponte 1 ponto que você manteria, 1 ponto que mudaria e proponha um teste falsificável de retomada após queda do coordenador sem duplicar tarefas.
-          O THOTH WEB deve permanecer fora do caminho crítico. Não altere o THOTH nesta fase.
-          Responda em português, até 220 palavras, começando exatamente com ACK THOTH-EXT-B-01."""
+          Responda DIRETAMENTE à proposta da IA-A. Diga 1 ponto que manteria, 1 ponto que mudaria e proponha um teste falsificável para provar retomada após queda do coordenador sem duplicar tarefas.
+          THOTH WEB deve permanecer fora do caminho crítico. Não altere o THOTH nesta fase.
+          Responda em português, até 180 palavras, começando exatamente com ACK THOTH-EXT-B-02."""
 
           b = None
-          b_raw = None
-          # Prefer a catalog provider different from IA-A's actual route.
-          preferred = []
-          deferred = []
-          for model, provider in candidates[:16]:
-              if model == a["requested_model"]:
+          for entry in models[:18]:
+              if entry["name"] == a["actual_model"] or entry["name"] == a["requested_model"]:
                   continue
-              if a.get("routed_via") and provider == a.get("routed_via"):
-                  deferred.append((model, provider))
-              else:
-                  preferred.append((model, provider))
-
-          for model, provider in (preferred + deferred):
-              result, raw = call_model(model, prompt_b)
-              attempts.append({"phase": "B", "model": model, "catalog_provider": provider, "ok": bool(result), "status": raw.get("status")})
-              if result:
-                  # Require different actual provider when possible.
-                  if a.get("routed_via") and result.get("routed_via") == a.get("routed_via"):
+              res, trace = generate(entry["name"], prompt_b)
+              attempts.append({"phase":"B","model":entry["name"],"success":bool(res),"trace":trace})
+              if res and res.get("text"):
+                  # Require actual model name to differ when Horde reports it.
+                  if res.get("actual_model") == a.get("actual_model"):
                       continue
-                  b, b_raw = result, raw
+                  b = res
                   break
-              time.sleep(1)
-
           if not b:
-              result, raw = call_model("auto:fast", prompt_b)
-              attempts.append({"phase": "B", "model": "auto:fast", "ok": bool(result), "status": raw.get("status")})
-              if not result:
-                  raise SystemExit("IA-B failed: " + json.dumps(attempts, ensure_ascii=False))
-              b, b_raw = result, raw
+              pathlib.Path("lab/thoth-mesa/failed-attempts.json").write_text(json.dumps(attempts, ensure_ascii=False, indent=2), encoding="utf-8")
+              raise SystemExit("IA-B failed across alternate active models")
 
           now = datetime.datetime.now(datetime.timezone.utc).isoformat()
           transcript = {
-              "experiment_id": "THOTH-NEW-POINT-001",
+              "experiment_id": "THOTH-NEW-POINT-002",
               "timestamp_utc": now,
-              "transport": "GitHub Actions runner -> llmfaucet public OpenAI-compatible gateway",
+              "transport": "GitHub Actions runner -> AI Horde public distributed inference API",
               "thoth_web_dependency": False,
+              "vps_dependency": False,
               "phase": "communication-only",
               "ia_a": a,
               "ia_b": b,
               "b_received_a_verbatim": a["text"] in prompt_b,
-              "provider_distinct": bool(a.get("routed_via") and b.get("routed_via") and a.get("routed_via") != b.get("routed_via")),
-              "attempts": attempts
+              "different_actual_models": a.get("actual_model") != b.get("actual_model"),
+              "different_workers": bool(a.get("worker_id") and b.get("worker_id") and a.get("worker_id") != b.get("worker_id")),
+              "ack_a": a["text"].startswith("ACK THOTH-EXT-A-02"),
+              "ack_b": b["text"].startswith("ACK THOTH-EXT-B-02"),
+              "attempts": attempts,
           }
 
           pathlib.Path("lab/thoth-mesa/transcript.json").write_text(
               json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8"
           )
-          md = f"""# THOTH Multi-AI External Dialogue — Proof 001
+          md = f"""# THOTH Multi-AI External Dialogue — Proof 002
 
           **Timestamp UTC:** {now}
-          **Transport:** GitHub Actions runner → llmfaucet.dev
+          **Transport:** GitHub Actions runner → AI Horde distributed public inference
           **THOTH WEB in critical path:** NO
-          **Phase:** Communication only. No THOTH code changed.
+          **Current VPS in critical path:** NO
+          **Phase:** Communication only. THOTH application code was not modified.
 
           ## IA-A
           - Requested model: `{a['requested_model']}`
-          - Response model: `{a.get('response_model')}`
-          - Routed via: `{a.get('routed_via')}`
-          - Fallback attempts: `{a.get('fallback_attempts')}`
+          - Actual model: `{a.get('actual_model')}`
+          - Worker: `{a.get('worker_name')}`
+          - Horde job: `{a.get('job_id')}`
 
           {a['text']}
 
           ## IA-B
           - Requested model: `{b['requested_model']}`
-          - Response model: `{b.get('response_model')}`
-          - Routed via: `{b.get('routed_via')}`
-          - Fallback attempts: `{b.get('fallback_attempts')}`
+          - Actual model: `{b.get('actual_model')}`
+          - Worker: `{b.get('worker_name')}`
+          - Horde job: `{b.get('job_id')}`
 
           {b['text']}
 
           ## Proof checks
           - IA-B received IA-A response verbatim: **{transcript['b_received_a_verbatim']}**
-          - Actual routed providers distinct: **{transcript['provider_distinct']}**
+          - Different actual model names: **{transcript['different_actual_models']}**
+          - Different Horde workers: **{transcript['different_workers']}**
+          - IA-A ACK respected: **{transcript['ack_a']}**
+          - IA-B ACK respected: **{transcript['ack_b']}**
           - Persistent machine-readable transcript: `transcript.json`
-          - Model catalog snapshot: `models-snapshot.json`
+          - Active model snapshot: `aihorde-models-snapshot.json`
           """
-          pathlib.Path("lab/thoth-mesa/PROOF-001.md").write_text(md, encoding="utf-8")
+          pathlib.Path("lab/thoth-mesa/PROOF-002.md").write_text(md, encoding="utf-8")
           print(json.dumps(transcript, ensure_ascii=False, indent=2))
           PY
           python /tmp/dialogue.py
@@ -232,6 +245,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No new proof to commit."
           else
-            git commit -m "lab: persist external multi-AI dialogue proof"
+            git commit -m "lab: persist external AI-Horde dialogue proof"
             git push origin HEAD:lab/thoth-mesa-llmfaucet
           fi
