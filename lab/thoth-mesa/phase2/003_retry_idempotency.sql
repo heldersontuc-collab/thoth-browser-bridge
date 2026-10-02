@@ -45,14 +45,17 @@ begin
     p_thread_id,p_parent_message_id,p_invocation_id,p_position,
     p_actor_type,p_actor_id,p_content,coalesce(p_provenance,'{}'::jsonb),p_idempotency_key
   )
-  on conflict (idempotency_key) where idempotency_key is not null
-  do nothing
+  on conflict do nothing
   returning * into v_message;
 
   if v_message.id is null then
     select * into v_message
     from thoth_mesa.messages
     where idempotency_key=p_idempotency_key;
+
+    if v_message.id is null then
+      raise exception 'MESSAGE_POSITION_CONFLICT:thread:%:position:%', p_thread_id, p_position;
+    end if;
 
     if v_message.thread_id is distinct from p_thread_id
        or v_message.position is distinct from p_position
