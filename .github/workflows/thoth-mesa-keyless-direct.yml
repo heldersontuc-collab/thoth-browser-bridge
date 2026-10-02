@@ -18,7 +18,7 @@ jobs:
         with:
           ref: lab/thoth-mesa-keyless-direct
 
-      - name: Run DeepSeek to Gemini to Mistral dialogue
+      - name: Run GLM to Gemini to Mistral dialogue
         shell: bash
         run: |
           mkdir -p lab/thoth-mesa
@@ -81,27 +81,27 @@ jobs:
 
           attempts=[]
 
-          prompt_a="""ID THOTH-EXT-A-05. Você é IA-A, primeira arquiteta de uma mesa de engenharia multi-IA.
+          prompt_a="""ID THOTH-EXT-A-06. Você é IA-A, primeira arquiteta de uma mesa de engenharia multi-IA.
           Estamos projetando um ambiente externo persistente onde várias IAs possam conversar e cooperar. THOTH WEB deve ser apenas ferramenta auxiliar e NÃO pode estar no caminho crítico. A VPS atual não deve hospedar inferência pesada nem o histórico principal.
           Requisitos: proveniência, memória persistente, tarefas com estados explícitos, auditoria, retomada sem duplicação, limites de custo/rate e visibilidade humana. Nenhuma IA escreve diretamente em produção.
           Fase atual: somente arquitetura do ambiente, sem modificar o THOTH.
           Proponha a MENOR arquitetura viável e indique a falha mais importante a testar primeiro.
-          Responda em português, até 170 palavras, começando exatamente com ACK THOTH-EXT-A-05."""
+          Responda em português, até 170 palavras, começando exatamente com ACK THOTH-EXT-A-06."""
 
-          a=call_family(["DeepSeek-V4-Flash-0731","deepseek-v4-flash:0731"],prompt_a,"A",attempts)
+          a=call_family(["glm-5.2","glm-5.3-flash"],prompt_a,"A",attempts)
           if not a:
               pathlib.Path("lab/thoth-mesa/live-attempts.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
-              raise SystemExit("DeepSeek family did not answer")
+              raise SystemExit("GLM family did not answer")
 
-          prompt_b=f"""ID THOTH-EXT-B-05. Você é IA-B, uma revisora de família diferente.
+          prompt_b=f"""ID THOTH-EXT-B-06. Você é IA-B, uma revisora de família diferente.
           A IA-A respondeu EXATAMENTE:
 
-          --- IA-A / DEEPSEEK ---
+          --- IA-A / GLM ---
           {a['text']}
           --- FIM IA-A ---
 
           Responda diretamente à proposta da IA-A. Diga 1 ponto que manteria, 1 ponto que mudaria e crie UM teste falsificável de retomada após queda do coordenador sem duplicar tarefas. THOTH WEB precisa permanecer fora do caminho crítico. Não altere THOTH.
-          Responda em português, até 170 palavras, começando exatamente com ACK THOTH-EXT-B-05."""
+          Responda em português, até 170 palavras, começando exatamente com ACK THOTH-EXT-B-06."""
 
           time.sleep(2)
           b=call_family(["gemini-3.7-flash","gemini-3.1-flash-lite","gemini-3-flash"],prompt_b,"B",attempts)
@@ -109,9 +109,9 @@ jobs:
               pathlib.Path("lab/thoth-mesa/live-attempts.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
               raise SystemExit("Gemini family did not answer")
 
-          prompt_c=f"""ID THOTH-EXT-C-05. Você é IA-C, terceira revisora de outra família.
+          prompt_c=f"""ID THOTH-EXT-C-06. Você é IA-C, terceira revisora de outra família.
 
-          IA-A / DeepSeek:
+          IA-A / GLM:
           --- A ---
           {a['text']}
           --- FIM A ---
@@ -122,7 +122,7 @@ jobs:
           --- FIM B ---
 
           Faça uma síntese crítica do diálogo. Identifique 1 consenso, 1 discordância útil e UMA decisão mínima para a próxima etapa da futura sala de engenharia. Não altere THOTH.
-          Responda em português, até 150 palavras, começando exatamente com ACK THOTH-EXT-C-05."""
+          Responda em português, até 150 palavras, começando exatamente com ACK THOTH-EXT-C-06."""
 
           time.sleep(2)
           c=call_family(["mistral-Nemo-Instruct-2407","codestral-latest"],prompt_c,"C",attempts)
@@ -132,29 +132,29 @@ jobs:
 
           now=datetime.datetime.now(datetime.timezone.utc).isoformat()
           proof={
-              "experiment_id":"THOTH-NEW-POINT-005",
+              "experiment_id":"THOTH-NEW-POINT-006",
               "timestamp_utc":now,
               "transport":"GitHub Actions hosted runner -> LLM7 anonymous OpenAI-compatible API",
               "endpoint":"api.llm7.io",
               "thoth_web_dependency":False,
               "vps_dependency":False,
               "phase":"communication-only",
-              "ia_a":{"family":"DeepSeek",**a},
+              "ia_a":{"family":"GLM",**a},
               "ia_b":{"family":"Gemini",**b},
               "ia_c":({"family":"Mistral",**c} if c else None),
               "checks":{
                   "b_received_a_verbatim":a["text"] in prompt_b,
                   "c_received_a_and_b_verbatim":bool(c) and a["text"] in prompt_c and b["text"] in prompt_c,
                   "distinct_requested_models_ab":a["requested_model"]!=b["requested_model"],
-                  "ack_a":a["text"].startswith("ACK THOTH-EXT-A-05"),
-                  "ack_b":b["text"].startswith("ACK THOTH-EXT-B-05"),
-                  "ack_c":bool(c) and c["text"].startswith("ACK THOTH-EXT-C-05"),
+                  "ack_a":a["text"].startswith("ACK THOTH-EXT-A-06"),
+                  "ack_b":b["text"].startswith("ACK THOTH-EXT-B-06"),
+                  "ack_c":bool(c) and c["text"].startswith("ACK THOTH-EXT-C-06"),
                   "minimum_dialogue_proven": bool(a.get("text") and b.get("text") and a["text"] in prompt_b),
               },
               "attempts":attempts,
           }
 
-          pathlib.Path("lab/thoth-mesa/transcript-live.json").write_text(
+          pathlib.Path("lab/thoth-mesa/transcript-live-006.json").write_text(
               json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
           )
 
@@ -170,7 +170,7 @@ jobs:
           """
 
           ch=proof["checks"]
-          md=f"""# THOTH Multi-AI External Dialogue — Proof 005
+          md=f"""# THOTH Multi-AI External Dialogue — Proof 006
 
           **Timestamp UTC:** {now}
           **Transport:** GitHub Actions hosted runner → LLM7 anonymous API
@@ -178,7 +178,7 @@ jobs:
           **Current VPS critical dependency:** NO
           **THOTH code modified:** NO
 
-          ## IA-A — DeepSeek family
+          ## IA-A — GLM family
           - Requested model: `{a['requested_model']}`
           - Response model: `{a.get('response_model')}`
           - HTTP: {a['http_status']} · latency {a['latency_s']} s
@@ -201,9 +201,9 @@ jobs:
           - B ACK: **{ch['ack_b']}**
           - C ACK: **{ch['ack_c']}**
           - Minimum external multi-model dialogue proven: **{ch['minimum_dialogue_proven']}**
-          - Machine transcript: `transcript-live.json`
+          - Machine transcript: `transcript-live-006.json`
           """
-          pathlib.Path("lab/thoth-mesa/PROOF-005.md").write_text(md,encoding="utf-8")
+          pathlib.Path("lab/thoth-mesa/PROOF-006.md").write_text(md,encoding="utf-8")
           print("\nFINAL_PROOF\n"+json.dumps(proof,ensure_ascii=False,indent=2),flush=True)
           PY
           python /tmp/live_dialogue.py
@@ -214,5 +214,5 @@ jobs:
           git config user.name "THOTH Mesa Lab"
           git config user.email "thoth-mesa-lab@users.noreply.github.com"
           git add lab/thoth-mesa/
-          git commit -m "lab: persist live DeepSeek-Gemini-Mistral dialogue proof"
+          git commit -m "lab: persist live GLM-Gemini-Mistral dialogue proof"
           git push origin HEAD:lab/thoth-mesa-keyless-direct
