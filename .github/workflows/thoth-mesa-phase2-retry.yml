@@ -1,0 +1,220 @@
+name: THOTH Mesa Phase2 Retry Verification
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-phase2-retry
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: thoth_mesa_retry_lab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d thoth_mesa_retry_lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: thoth_mesa_retry_lab
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-phase2-retry
+
+      - name: Prepare Supabase-like roles
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role service_role nologin bypassrls;
+          create role anon nologin;
+          create role authenticated nologin;
+          SQL
+
+      - name: Apply schemas
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/001_machine_room_core.sql
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/002_router_core.sql
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/003_retry_idempotency.sql
+
+      - name: Verify sequential retry idempotency
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_thread uuid;
+            v_task uuid;
+            m1 thoth_mesa.messages;
+            m2 thoth_mesa.messages;
+            i1 thoth_mesa.model_invocations;
+            i2 thoth_mesa.model_invocations;
+            v_count integer;
+            hash_a text := repeat('a',64);
+            hash_b text := repeat('b',64);
+          begin
+            insert into thoth_mesa.threads(mission_key,subject)
+            values('retry-proof-001','Retry idempotency proof')
+            returning id into v_thread;
+
+            insert into thoth_mesa.tasks(thread_id,kind,title,idempotency_key)
+            values(v_thread,'retry','Verify retry safety','retry-task-001')
+            returning id into v_task;
+
+            m1 := thoth_mesa.append_message_idempotent(
+              v_thread,null,null,1,'ai','model-a','hello retry',
+              '{"source":"test"}'::jsonb,'msg-idem-001'
+            );
+
+            m2 := thoth_mesa.append_message_idempotent(
+              v_thread,null,null,1,'ai','model-a','hello retry',
+              '{"source":"test"}'::jsonb,'msg-idem-001'
+            );
+
+            if m1.id <> m2.id then
+              raise exception 'message retry returned different IDs';
+            end if;
+
+            select count(*) into v_count from thoth_mesa.messages
+            where idempotency_key='msg-idem-001';
+            if v_count <> 1 then
+              raise exception 'message retry created % rows',v_count;
+            end if;
+
+            begin
+              perform thoth_mesa.append_message_idempotent(
+                v_thread,null,null,1,'ai','model-a','DIFFERENT CONTENT',
+                '{}'::jsonb,'msg-idem-001'
+              );
+              raise exception 'message idempotency conflict was not rejected';
+            exception
+              when others then
+                if position('IDEMPOTENCY_CONFLICT:message' in sqlerrm)=0 then raise; end if;
+            end;
+
+            i1 := thoth_mesa.begin_invocation_idempotent(
+              v_thread,v_task,'provider-a','model-a','gateway',
+              hash_a,'inv-idem-001','{}'::jsonb
+            );
+
+            i2 := thoth_mesa.begin_invocation_idempotent(
+              v_thread,v_task,'provider-a','model-a','gateway',
+              hash_a,'inv-idem-001','{}'::jsonb
+            );
+
+            if i1.id <> i2.id then
+              raise exception 'invocation retry returned different IDs';
+            end if;
+
+            select count(*) into v_count from thoth_mesa.model_invocations
+            where idempotency_key='inv-idem-001';
+            if v_count <> 1 then
+              raise exception 'invocation retry created % rows',v_count;
+            end if;
+
+            begin
+              perform thoth_mesa.begin_invocation_idempotent(
+                v_thread,v_task,'provider-a','model-a','gateway',
+                hash_b,'inv-idem-001','{}'::jsonb
+              );
+              raise exception 'invocation idempotency conflict was not rejected';
+            exception
+              when others then
+                if position('IDEMPOTENCY_CONFLICT:invocation' in sqlerrm)=0 then raise; end if;
+            end;
+          end
+          $$;
+          SQL
+
+      - name: Verify concurrent retries collapse to one row
+        shell: bash
+        run: |
+          THREAD_ID=$(psql -qAtc "insert into thoth_mesa.threads(mission_key,subject) values('retry-concurrency-001','Concurrent retry proof') returning id" | head -n1 | tr -d '[:space:]')
+          TASK_ID=$(psql -qAtc "insert into thoth_mesa.tasks(thread_id,kind,title,idempotency_key) values('$THREAD_ID','retry','Concurrent invocation retry','retry-task-concurrent-001') returning id" | head -n1 | tr -d '[:space:]')
+
+          rm -f /tmp/msg-retry-*.txt
+          for i in 1 2; do
+            (
+              psql -qAtc "select id from thoth_mesa.append_message_idempotent('$THREAD_ID',null,null,1,'ai','model-race','same content','{}'::jsonb,'msg-race-001')" > "/tmp/msg-retry-$i.txt"
+            ) &
+          done
+          wait
+
+          M1=$(cat /tmp/msg-retry-1.txt | tr -d '[:space:]')
+          M2=$(cat /tmp/msg-retry-2.txt | tr -d '[:space:]')
+          MC=$(psql -qAtc "select count(*) from thoth_mesa.messages where idempotency_key='msg-race-001'" | tr -d '[:space:]')
+          if [ -z "$M1" ] || [ "$M1" != "$M2" ] || [ "$MC" -ne 1 ]; then
+            echo "Concurrent message retry failed M1=$M1 M2=$M2 rows=$MC"
+            exit 1
+          fi
+
+          HASH=$(printf 'c%.0s' {1..64})
+          rm -f /tmp/inv-retry-*.txt
+          for i in 1 2; do
+            (
+              psql -qAtc "select id from thoth_mesa.begin_invocation_idempotent('$THREAD_ID','$TASK_ID','provider-race','model-race','gateway','$HASH','inv-race-001','{}'::jsonb)" > "/tmp/inv-retry-$i.txt"
+            ) &
+          done
+          wait
+
+          I1=$(cat /tmp/inv-retry-1.txt | tr -d '[:space:]')
+          I2=$(cat /tmp/inv-retry-2.txt | tr -d '[:space:]')
+          IC=$(psql -qAtc "select count(*) from thoth_mesa.model_invocations where idempotency_key='inv-race-001'" | tr -d '[:space:]')
+          if [ -z "$I1" ] || [ "$I1" != "$I2" ] || [ "$IC" -ne 1 ]; then
+            echo "Concurrent invocation retry failed I1=$I1 I2=$I2 rows=$IC"
+            exit 1
+          fi
+
+      - name: Emit retry proof
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          python - <<'PY'
+          import json,datetime,pathlib
+          proof={
+            "proof_id":"THOTH-PHASE2-RETRY-001",
+            "verified_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "checks":{
+              "message_retry_same_key_same_payload_one_row":True,
+              "message_same_key_different_payload_rejected":True,
+              "invocation_retry_same_key_same_request_one_row":True,
+              "invocation_same_key_different_request_rejected":True,
+              "concurrent_message_retries_collapse":True,
+              "concurrent_invocation_retries_collapse":True
+            },
+            "thoth_web_dependency":False,
+            "vps_dependency":False,
+            "thoth_code_touched":False
+          }
+          pathlib.Path("lab/thoth-mesa/phase2/PROOF-RETRY-001.json").write_text(
+            json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Persist proof
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Phase2 Lab"
+          git config user.email "thoth-mesa-phase2@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/PROOF-RETRY-001.json
+          git commit -m "lab: persist phase2 retry proof"
+          git push origin HEAD:lab/thoth-mesa-phase2-retry
