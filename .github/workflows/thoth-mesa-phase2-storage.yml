@@ -256,6 +256,47 @@ jobs:
           $$;
           SQL
 
+      - name: Stress concurrent claims and idempotent events
+        shell: bash
+        run: |
+          THREAD_ID=$(psql -Atc "insert into thoth_mesa.threads(mission_key,subject) values('mission-concurrency-001','concurrency stress') returning id")
+          for i in 1 2 3 4 5; do
+            psql -v ON_ERROR_STOP=1 -c "insert into thoth_mesa.tasks(thread_id,kind,title,idempotency_key,priority) values('$THREAD_ID','stress','job-$i','stress-task-$i',$i)" >/dev/null
+          done
+
+          rm -f /tmp/claim-*.txt
+          for i in $(seq 1 10); do
+            (psql -Atc "select id from thoth_mesa.claim_next_task('concurrent-worker-$i',60)" > "/tmp/claim-$i.txt") &
+          done
+          wait
+
+          cat /tmp/claim-*.txt | sed '/^$/d' | sort > /tmp/claims.txt
+          CLAIM_COUNT=$(wc -l < /tmp/claims.txt | tr -d ' ')
+          UNIQUE_COUNT=$(sort -u /tmp/claims.txt | wc -l | tr -d ' ')
+          if [ "$CLAIM_COUNT" -ne 5 ] || [ "$UNIQUE_COUNT" -ne 5 ]; then
+            echo "Concurrent claim failure: claims=$CLAIM_COUNT unique=$UNIQUE_COUNT"
+            cat /tmp/claims.txt
+            exit 1
+          fi
+
+          TASK_ID=$(head -n1 /tmp/claims.txt)
+          rm -f /tmp/event-*.txt
+          for i in 1 2; do
+            (psql -Atc "select event_id from thoth_mesa.append_event('$THREAD_ID','task','$TASK_ID','stress.idempotent','race-worker-$i','{}'::jsonb,'stress-event-same-key',null,null)" > "/tmp/event-$i.txt") &
+          done
+          wait
+
+          E1=$(cat /tmp/event-1.txt | tr -d '[:space:]')
+          E2=$(cat /tmp/event-2.txt | tr -d '[:space:]')
+          EVENT_ROWS=$(psql -Atc "select count(*) from thoth_mesa.events where idempotency_key='stress-event-same-key'" | tr -d '[:space:]')
+          if [ -z "$E1" ] || [ "$E1" != "$E2" ] || [ "$EVENT_ROWS" -ne 1 ]; then
+            echo "Idempotency race failure: e1=$E1 e2=$E2 rows=$EVENT_ROWS"
+            exit 1
+          fi
+
+          echo "concurrent_claims=5/5_unique"
+          echo "concurrent_idempotent_event=1_row_same_id"
+
       - name: Emit machine proof
         shell: bash
         run: |
@@ -278,7 +319,9 @@ jobs:
               "recovered_task_completed":True,
               "service_role_least_privilege":True,
               "anon_has_no_schema_access":True,
-              "authenticated_has_no_schema_access":True
+              "authenticated_has_no_schema_access":True,
+              "ten_workers_five_tasks_no_duplicate_claims":True,
+              "concurrent_same_idempotency_key_one_event":True
             },
             "thoth_web_dependency":False,
             "vps_dependency":False,
