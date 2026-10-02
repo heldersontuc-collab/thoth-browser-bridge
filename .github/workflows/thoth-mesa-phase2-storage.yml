@@ -1,0 +1,300 @@
+name: THOTH Mesa Phase2 Storage Verification
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-phase2-storage
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: thoth_mesa_lab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d thoth_mesa_lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: thoth_mesa_lab
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-phase2-storage
+
+      - name: Prepare Supabase-like roles
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role service_role nologin bypassrls;
+          create role anon nologin;
+          create role authenticated nologin;
+          SQL
+
+      - name: Apply machine-room schema
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/001_machine_room_core.sql
+
+      - name: Run invariants and recovery tests
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_thread uuid;
+            v_task uuid;
+            v_event1 uuid;
+            v_event2 uuid;
+            v_msg uuid;
+            v_cp uuid;
+            v_claim1 uuid;
+            v_claim2 uuid;
+            v_ok boolean;
+            v_count integer;
+            v_attempts integer;
+            v_status text;
+            v_owner text;
+          begin
+            insert into thoth_mesa.threads(mission_key,subject)
+            values('mission-phase2-001','THOTH Mesa persistence verification')
+            returning id into v_thread;
+
+            insert into thoth_mesa.tasks(
+              thread_id,kind,title,payload,idempotency_key,priority
+            ) values(
+              v_thread,'architecture_review','verify crash-safe queue',
+              '{"proof":"010"}'::jsonb,'task-idem-001',10
+            ) returning id into v_task;
+
+            -- Idempotent append must return the same event, not create duplicates.
+            select event_id into v_event1
+            from thoth_mesa.append_event(
+              v_thread,'task',v_task,'task.created','worker-test',
+              '{"status":"pending"}'::jsonb,'evt-idem-001',null,null
+            );
+
+            select event_id into v_event2
+            from thoth_mesa.append_event(
+              v_thread,'task',v_task,'task.created','worker-test',
+              '{"status":"pending"}'::jsonb,'evt-idem-001',null,null
+            );
+
+            if v_event1 is distinct from v_event2 then
+              raise exception 'idempotent append returned different events';
+            end if;
+
+            select count(*) into v_count
+            from thoth_mesa.events
+            where idempotency_key='evt-idem-001';
+
+            if v_count <> 1 then
+              raise exception 'idempotent append created % rows', v_count;
+            end if;
+
+            -- Event log must be append-only.
+            begin
+              update thoth_mesa.events set actor_id='tampered' where event_id=v_event1;
+              raise exception 'event mutation unexpectedly succeeded';
+            exception
+              when others then
+                if position('THOTH_MESA_IMMUTABLE' in sqlerrm)=0 then
+                  raise;
+                end if;
+            end;
+
+            -- Messages are immutable and self-hashed.
+            insert into thoth_mesa.messages(
+              thread_id,position,actor_type,actor_id,content,provenance
+            ) values(
+              v_thread,1,'ai','mistral-Nemo-Instruct-2407',
+              'ACK test message','{"route":"lab"}'::jsonb
+            ) returning id into v_msg;
+
+            if (select content_sha256 from thoth_mesa.messages where id=v_msg)
+               <> encode(digest('ACK test message','sha256'),'hex') then
+              raise exception 'message hash mismatch';
+            end if;
+
+            begin
+              delete from thoth_mesa.messages where id=v_msg;
+              raise exception 'message deletion unexpectedly succeeded';
+            exception
+              when others then
+                if position('THOTH_MESA_IMMUTABLE' in sqlerrm)=0 then
+                  raise;
+                end if;
+            end;
+
+            -- Checkpoint is immutable and carries deterministic state hash.
+            insert into thoth_mesa.checkpoints(
+              thread_id,task_id,version,state,created_by,idempotency_key
+            ) values(
+              v_thread,v_task,1,
+              '{"step":"A","done":true}'::jsonb,
+              'coordinator-A','checkpoint-idem-001'
+            ) returning id into v_cp;
+
+            begin
+              update thoth_mesa.checkpoints
+              set state='{"step":"A","done":false}'::jsonb
+              where id=v_cp;
+              raise exception 'checkpoint mutation unexpectedly succeeded';
+            exception
+              when others then
+                if position('THOTH_MESA_IMMUTABLE' in sqlerrm)=0 then
+                  raise;
+                end if;
+            end;
+
+            -- Worker A claims the only task.
+            select id into v_claim1
+            from thoth_mesa.claim_next_task('worker-A',30);
+
+            if v_claim1 is distinct from v_task then
+              raise exception 'worker A did not claim expected task';
+            end if;
+
+            -- Worker B must not see the same live lease.
+            select id into v_claim2
+            from thoth_mesa.claim_next_task('worker-B',30);
+
+            if v_claim2 is not null then
+              raise exception 'duplicate live claim occurred';
+            end if;
+
+            -- Move A into running state.
+            select thoth_mesa.mark_task_running(v_task,'worker-A',30) into v_ok;
+            if not v_ok then
+              raise exception 'worker A could not mark task running';
+            end if;
+
+            -- Simulate coordinator death by expiring the lease, not replaying task creation.
+            update thoth_mesa.tasks
+            set lease_until=now()-interval '1 second'
+            where id=v_task;
+
+            -- Worker B recovers the same task after lease expiry.
+            select id into v_claim2
+            from thoth_mesa.claim_next_task('worker-B',30);
+
+            if v_claim2 is distinct from v_task then
+              raise exception 'worker B did not recover expired task';
+            end if;
+
+            select attempt_count,status,lease_owner
+            into v_attempts,v_status,v_owner
+            from thoth_mesa.tasks where id=v_task;
+
+            if v_attempts <> 2 or v_status <> 'claimed' or v_owner <> 'worker-B' then
+              raise exception 'recovery state wrong: attempts %, status %, owner %',
+                v_attempts,v_status,v_owner;
+            end if;
+
+            select thoth_mesa.mark_task_running(v_task,'worker-B',30) into v_ok;
+            if not v_ok then
+              raise exception 'worker B could not mark recovered task running';
+            end if;
+
+            select thoth_mesa.complete_task(
+              v_task,'worker-B','{"verified":true}'::jsonb
+            ) into v_ok;
+
+            if not v_ok then
+              raise exception 'worker B could not complete recovered task';
+            end if;
+
+            select status into v_status
+            from thoth_mesa.tasks where id=v_task;
+
+            if v_status <> 'completed' then
+              raise exception 'task did not finish completed';
+            end if;
+          end
+          $$;
+
+          -- Privilege boundary checks.
+          do $$
+          begin
+            if not has_schema_privilege('service_role','thoth_mesa','USAGE') then
+              raise exception 'service_role missing schema usage';
+            end if;
+
+            if has_table_privilege('service_role','thoth_mesa.events','UPDATE') then
+              raise exception 'service_role unexpectedly can update events';
+            end if;
+
+            if has_table_privilege('service_role','thoth_mesa.messages','DELETE') then
+              raise exception 'service_role unexpectedly can delete messages';
+            end if;
+
+            if has_schema_privilege('anon','thoth_mesa','USAGE') then
+              raise exception 'anon unexpectedly has schema usage';
+            end if;
+
+            if has_schema_privilege('authenticated','thoth_mesa','USAGE') then
+              raise exception 'authenticated unexpectedly has schema usage';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Emit machine proof
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          python - <<'PY'
+          import json, datetime, pathlib
+          proof={
+            "proof_id":"THOTH-PHASE2-STORAGE-001",
+            "verified_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "postgres":"17",
+            "checks":{
+              "schema_applied":True,
+              "event_append_idempotent":True,
+              "event_log_append_only":True,
+              "messages_immutable":True,
+              "message_hash_verified":True,
+              "checkpoints_immutable":True,
+              "single_live_task_claim":True,
+              "expired_lease_recovered":True,
+              "recovered_task_completed":True,
+              "service_role_least_privilege":True,
+              "anon_has_no_schema_access":True,
+              "authenticated_has_no_schema_access":True
+            },
+            "thoth_web_dependency":False,
+            "vps_dependency":False,
+            "thoth_code_touched":False
+          }
+          pathlib.Path("lab/thoth-mesa/phase2/PROOF-STORAGE-001.json").write_text(
+            json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Persist proof
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Phase2 Lab"
+          git config user.email "thoth-mesa-phase2@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/PROOF-STORAGE-001.json
+          git commit -m "lab: persist phase2 storage proof"
+          git push origin HEAD:lab/thoth-mesa-phase2-storage
