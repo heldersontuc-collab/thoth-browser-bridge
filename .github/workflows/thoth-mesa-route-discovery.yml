@@ -1,0 +1,108 @@
+name: THOTH Mesa Route Discovery
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-route-discovery
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-route-discovery
+
+      - name: Probe public model routes without credentials
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          cat > /tmp/probe.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, datetime
+
+          endpoints = [
+            {
+              "route":"opencode-zen",
+              "url":"https://opencode.ai/zen/v1/chat/completions",
+              "models":["deepseek-v4-flash-free","nemotron-3-ultra-free","qwen3.8-flash"]
+            }
+          ]
+
+          prompt="Reply exactly: ACK THOTH-ROUTE-DISCOVERY-001"
+
+          results=[]
+          for e in endpoints:
+            for model in e["models"]:
+              payload={
+                "model":model,
+                "messages":[{"role":"user","content":prompt}],
+                "temperature":0,
+                "max_tokens":40,
+                "stream":False
+              }
+              req=urllib.request.Request(
+                e["url"],
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                  "Content-Type":"application/json",
+                  "Accept":"application/json",
+                  "User-Agent":"THOTH-MESA-ROUTE-PROBE/1.0"
+                },
+                method="POST"
+              )
+              item={"route":e["route"],"model":model}
+              try:
+                with urllib.request.urlopen(req,timeout=45) as resp:
+                  raw=resp.read().decode("utf-8","replace")
+                  item["http_status"]=resp.status
+                  try:
+                    obj=json.loads(raw)
+                    content=obj.get("choices",[{}])[0].get("message",{}).get("content")
+                    item["response_model"]=obj.get("model")
+                    item["content"]=content
+                    item["success"]=bool(resp.status==200 and isinstance(content,str) and content.strip())
+                  except Exception:
+                    item["raw"]=raw[:1000]
+                    item["success"]=False
+              except urllib.error.HTTPError as ex:
+                raw=ex.read().decode("utf-8","replace")
+                item["http_status"]=ex.code
+                item["success"]=False
+                item["error"]=raw[:1200]
+              except Exception as ex:
+                item["http_status"]=0
+                item["success"]=False
+                item["error"]=repr(ex)
+              results.append(item)
+
+          proof={
+            "proof_id":"THOTH-ROUTE-DISCOVERY-001",
+            "verified_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "credential_used":False,
+            "results":results,
+            "any_route_live":any(x.get("success") for x in results),
+            "thoth_web_dependency":False,
+            "vps_dependency":False,
+            "thoth_code_touched":False
+          }
+
+          pathlib.Path("lab/thoth-mesa/phase2/ROUTE-DISCOVERY-001.json").write_text(
+            json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/probe.py
+
+      - name: Persist probe
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Route Lab"
+          git config user.email "thoth-mesa-route@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/ROUTE-DISCOVERY-001.json
+          git commit -m "lab: persist credential-free route discovery"
+          git push origin HEAD:lab/thoth-mesa-route-discovery
