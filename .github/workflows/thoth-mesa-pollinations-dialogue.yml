@@ -1,0 +1,223 @@
+name: THOTH Mesa Pollinations Dialogue
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-pollinations
+
+permissions:
+  contents: write
+
+jobs:
+  dialogue:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-pollinations
+
+      - name: Run external multi-model dialogue
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa
+          cat > /tmp/pollinations_dialogue.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, datetime, time
+
+          ENDPOINT = "https://text.pollinations.ai/openai"
+          HEADERS = {
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+              "User-Agent": "THOTH-MESA-LAB/0.3"
+          }
+
+          def call(model, prompt):
+              payload = {
+                  "model": model,
+                  "messages": [{"role":"user","content":prompt}],
+                  "stream": False,
+                  "temperature": 0.2,
+                  "max_tokens": 420
+              }
+              req = urllib.request.Request(
+                  ENDPOINT,
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers=HEADERS,
+                  method="POST"
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=90) as resp:
+                      raw = resp.read().decode("utf-8","replace")
+                      obj = json.loads(raw)
+                      text = obj["choices"][0]["message"]["content"].strip()
+                      return {
+                          "ok": True,
+                          "http_status": resp.status,
+                          "requested_model": model,
+                          "response_model": obj.get("model"),
+                          "text": text,
+                          "usage": obj.get("usage"),
+                          "response_headers": {
+                              k.lower(): v for k,v in resp.headers.items()
+                              if k.lower() in ("content-type","x-request-id","cf-ray")
+                          }
+                      }
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode("utf-8","replace")
+                  return {"ok":False,"http_status":e.code,"requested_model":model,"error":raw[:3000]}
+              except Exception as e:
+                  return {"ok":False,"http_status":0,"requested_model":model,"error":repr(e)}
+
+          a_prompt = """ID THOTH-EXT-A-03. Você é IA-A em um diálogo de engenharia multi-IA.
+          Estamos projetando uma sala externa e persistente para várias IAs colaborarem. THOTH WEB NÃO pode ser dependência do canal, apenas ferramenta auxiliar. A VPS atual também não deve carregar inferência ou armazenamento pesado.
+          Exigimos proveniência, memória persistente, tarefas com estados explícitos, auditoria, retomada segura, limite de custo/rate e visibilidade humana. Nenhum agente pode escrever em produção nesta fase.
+          Proponha a MENOR arquitetura viável da sala e identifique a falha mais importante a testar primeiro.
+          Responda em português, até 180 palavras, começando exatamente com ACK THOTH-EXT-A-03."""
+
+          candidates_a = ["gpt-5","qwen3-coder","gemini-3-flash"]
+          attempts=[]
+          a=None
+          for m in candidates_a:
+              r=call(m,a_prompt)
+              attempts.append({"phase":"A","result":r if not r.get("ok") else {k:r.get(k) for k in ("ok","http_status","requested_model","response_model")}})
+              if r.get("ok") and r.get("text"):
+                  a=r
+                  break
+              time.sleep(1)
+          if not a:
+              pathlib.Path("lab/thoth-mesa/pollinations-failure.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
+              raise SystemExit("IA-A failed")
+
+          b_prompt=f"""ID THOTH-EXT-B-03. Você é IA-B, revisor independente em um diálogo REAL entre modelos.
+          A IA-A respondeu exatamente isto:
+
+          --- IA-A ---
+          {a['text']}
+          --- FIM IA-A ---
+
+          Responda DIRETAMENTE à proposta. Diga 1 ponto que manteria, 1 ponto que mudaria e formule um teste falsificável de retomada após queda do coordenador, sem duplicar tarefas nem depender do THOTH WEB.
+          Não altere o THOTH nesta fase.
+          Responda em português, até 180 palavras, começando exatamente com ACK THOTH-EXT-B-03."""
+
+          candidates_b=["gemini-3-flash","qwen3-coder","gpt-5"]
+          b=None
+          for m in candidates_b:
+              if m == a["requested_model"]:
+                  continue
+              r=call(m,b_prompt)
+              attempts.append({"phase":"B","result":r if not r.get("ok") else {k:r.get(k) for k in ("ok","http_status","requested_model","response_model")}})
+              if r.get("ok") and r.get("text"):
+                  if r.get("response_model") and a.get("response_model") and r.get("response_model")==a.get("response_model"):
+                      continue
+                  b=r
+                  break
+              time.sleep(1)
+          if not b:
+              pathlib.Path("lab/thoth-mesa/pollinations-failure.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
+              raise SystemExit("IA-B failed")
+
+          c_prompt=f"""ID THOTH-EXT-C-03. Você é IA-C, segundo revisor de uma mesa multi-IA.
+          IA-A propôs:
+          --- A ---
+          {a['text']}
+          --- FIM A ---
+
+          IA-B respondeu:
+          --- B ---
+          {b['text']}
+          --- FIM B ---
+
+          Faça uma síntese crítica das duas propostas. Identifique um consenso, uma discordância útil e UMA decisão mínima para a próxima etapa da sala de engenharia. Não altere o THOTH.
+          Responda em português, até 160 palavras, começando exatamente com ACK THOTH-EXT-C-03."""
+
+          c=None
+          for m in ["qwen3-coder","gemini-3-flash","gpt-5"]:
+              if m in (a["requested_model"],b["requested_model"]):
+                  continue
+              r=call(m,c_prompt)
+              attempts.append({"phase":"C","result":r if not r.get("ok") else {k:r.get(k) for k in ("ok","http_status","requested_model","response_model")}})
+              if r.get("ok") and r.get("text"):
+                  c=r
+                  break
+
+          now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          proof={
+              "experiment_id":"THOTH-NEW-POINT-003",
+              "timestamp_utc":now,
+              "transport":"GitHub Actions hosted runner -> Pollinations OpenAI-compatible public API",
+              "thoth_web_dependency":False,
+              "vps_dependency":False,
+              "phase":"communication-only",
+              "ia_a":a,
+              "ia_b":b,
+              "ia_c":c,
+              "b_received_a_verbatim":a["text"] in b_prompt,
+              "c_received_a_and_b_verbatim": bool(c) and a["text"] in c_prompt and b["text"] in c_prompt,
+              "distinct_requested_models_ab":a["requested_model"]!=b["requested_model"],
+              "distinct_response_models_ab": (
+                  True if not a.get("response_model") or not b.get("response_model")
+                  else a.get("response_model")!=b.get("response_model")
+              ),
+              "ack_a":a["text"].startswith("ACK THOTH-EXT-A-03"),
+              "ack_b":b["text"].startswith("ACK THOTH-EXT-B-03"),
+              "ack_c":bool(c) and c["text"].startswith("ACK THOTH-EXT-C-03"),
+              "attempts":attempts
+          }
+          pathlib.Path("lab/thoth-mesa/transcript-pollinations.json").write_text(
+              json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+
+          c_section=""
+          if c:
+              c_section=f"""
+          ## IA-C
+          - Requested model: `{c['requested_model']}`
+          - Response model reported: `{c.get('response_model')}`
+
+          {c['text']}
+          """
+
+          md=f"""# THOTH Multi-AI External Dialogue — Proof 003
+
+          **Timestamp UTC:** {now}
+          **Transport:** GitHub Actions hosted runner → Pollinations public OpenAI-compatible API
+          **THOTH WEB in critical path:** NO
+          **Current VPS in critical path:** NO
+          **Phase:** Communication only. No THOTH application code was changed.
+
+          ## IA-A
+          - Requested model: `{a['requested_model']}`
+          - Response model reported: `{a.get('response_model')}`
+
+          {a['text']}
+
+          ## IA-B
+          - Requested model: `{b['requested_model']}`
+          - Response model reported: `{b.get('response_model')}`
+
+          {b['text']}
+          {c_section}
+
+          ## Proof checks
+          - IA-B received IA-A response verbatim: **{proof['b_received_a_verbatim']}**
+          - IA-C received both previous responses verbatim: **{proof['c_received_a_and_b_verbatim']}**
+          - IA-A / IA-B requested models distinct: **{proof['distinct_requested_models_ab']}**
+          - IA-A ACK respected: **{proof['ack_a']}**
+          - IA-B ACK respected: **{proof['ack_b']}**
+          - IA-C ACK respected: **{proof['ack_c']}**
+          - Machine-readable transcript: `transcript-pollinations.json`
+          """
+          pathlib.Path("lab/thoth-mesa/PROOF-003.md").write_text(md,encoding="utf-8")
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/pollinations_dialogue.py
+
+      - name: Persist proof on isolated lab branch
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Lab"
+          git config user.email "thoth-mesa-lab@users.noreply.github.com"
+          git add lab/thoth-mesa/
+          git commit -m "lab: persist Pollinations multi-model dialogue proof"
+          git push origin HEAD:lab/thoth-mesa-pollinations
