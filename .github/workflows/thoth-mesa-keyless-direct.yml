@@ -1,0 +1,261 @@
+name: THOTH Mesa Keyless Direct Dialogue
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-keyless-direct
+
+permissions:
+  contents: write
+
+jobs:
+  dialogue:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-keyless-direct
+
+      - name: Run direct provider-to-provider dialogue
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa
+          cat > /tmp/keyless_dialogue.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, datetime, time
+          from urllib.parse import urlparse
+
+          PROVIDERS = [
+              {
+                  "name":"LLM7",
+                  "endpoint":"https://api.llm7.io/v1/chat/completions",
+                  "models":["gpt-5.4","claude-sonnet-5"],
+              },
+              {
+                  "name":"OpenCode Zen",
+                  "endpoint":"https://opencode.ai/zen/v1/chat/completions",
+                  "models":["deepseek-v4-flash-free","qwen3.6-plus-free"],
+              },
+              {
+                  "name":"OVH AI Endpoints",
+                  "endpoint":"https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
+                  "models":["llama-3.1-8b","qwen2.5-vl-72b"],
+              },
+          ]
+
+          def call(spec, model, prompt):
+              payload={
+                  "model":model,
+                  "messages":[{"role":"user","content":prompt}],
+                  "stream":False,
+                  "temperature":0.2,
+                  "max_tokens":420,
+              }
+              headers={
+                  "Content-Type":"application/json",
+                  "Accept":"application/json",
+                  "User-Agent":"THOTH-MESA-LAB/0.4",
+              }
+              req=urllib.request.Request(
+                  spec["endpoint"],
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers=headers,
+                  method="POST",
+              )
+              started=time.time()
+              try:
+                  with urllib.request.urlopen(req,timeout=100) as resp:
+                      raw=resp.read().decode("utf-8","replace")
+                      obj=json.loads(raw)
+                      msg=obj["choices"][0]["message"]["content"]
+                      if isinstance(msg,list):
+                          msg="\n".join(str(x.get("text",x)) if isinstance(x,dict) else str(x) for x in msg)
+                      return {
+                          "ok":True,
+                          "provider":spec["name"],
+                          "endpoint_host":urlparse(spec["endpoint"]).hostname,
+                          "requested_model":model,
+                          "response_model":obj.get("model"),
+                          "http_status":resp.status,
+                          "latency_s":round(time.time()-started,3),
+                          "text":str(msg).strip(),
+                          "usage":obj.get("usage"),
+                      }
+              except urllib.error.HTTPError as e:
+                  raw=e.read().decode("utf-8","replace")
+                  return {
+                      "ok":False,"provider":spec["name"],"requested_model":model,
+                      "http_status":e.code,"latency_s":round(time.time()-started,3),
+                      "error":raw[:2500],
+                  }
+              except Exception as e:
+                  return {
+                      "ok":False,"provider":spec["name"],"requested_model":model,
+                      "http_status":0,"latency_s":round(time.time()-started,3),
+                      "error":repr(e),
+                  }
+
+          def call_first(spec,prompt,attempts,phase):
+              for model in spec["models"]:
+                  r=call(spec,model,prompt)
+                  attempts.append({"phase":phase,**({k:v for k,v in r.items() if k!="text" and k!="usage"})})
+                  print(json.dumps({"phase":phase,"attempt":{k:v for k,v in r.items() if k!="text" and k!="usage"}},ensure_ascii=False),flush=True)
+                  if r.get("ok") and r.get("text"):
+                      return r
+                  time.sleep(1)
+              return None
+
+          attempts=[]
+          a_prompt="""ID THOTH-EXT-A-04. Você é IA-A em um diálogo de engenharia entre IAs.
+          Estamos desenhando uma sala externa e persistente para várias IAs colaborarem. THOTH WEB não pode estar no caminho crítico; a VPS atual também não deve hospedar inferência pesada nem o histórico principal.
+          Requisitos: memória com proveniência, tarefas com estados explícitos, auditoria, retomada após falhas sem duplicação, limites de custo/rate, visibilidade humana e zero escrita direta em produção.
+          Fase atual: apenas arquitetura da sala, sem modificar THOTH.
+          Proponha a MENOR arquitetura viável e diga qual falha testar primeiro.
+          Responda em português, até 170 palavras, começando exatamente com ACK THOTH-EXT-A-04."""
+
+          a=None
+          a_idx=None
+          for idx,spec in enumerate(PROVIDERS):
+              a=call_first(spec,a_prompt,attempts,"A")
+              if a:
+                  a_idx=idx
+                  break
+          if not a:
+              pathlib.Path("lab/thoth-mesa/keyless-attempts.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
+              raise SystemExit("No provider produced IA-A")
+
+          b_prompt=f"""ID THOTH-EXT-B-04. Você é IA-B, revisor independente. A IA-A, de outro provedor, respondeu:
+
+          --- RESPOSTA EXATA DA IA-A ---
+          {a['text']}
+          --- FIM IA-A ---
+
+          Responda diretamente. Diga 1 ponto que manteria, 1 que mudaria e proponha UM teste falsificável para provar retomada após queda do coordenador sem duplicar tarefas. THOTH WEB deve ficar fora do caminho crítico. Não altere THOTH.
+          Responda em português, até 170 palavras, começando exatamente com ACK THOTH-EXT-B-04."""
+
+          b=None
+          b_idx=None
+          for idx,spec in enumerate(PROVIDERS):
+              if idx==a_idx: continue
+              b=call_first(spec,b_prompt,attempts,"B")
+              if b:
+                  b_idx=idx
+                  break
+          if not b:
+              pathlib.Path("lab/thoth-mesa/keyless-attempts.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
+              raise SystemExit("No second independent provider produced IA-B")
+
+          c_prompt=f"""ID THOTH-EXT-C-04. Você é IA-C, terceiro revisor de uma mesa multi-IA.
+
+          IA-A:
+          --- A ---
+          {a['text']}
+          --- FIM A ---
+
+          IA-B:
+          --- B ---
+          {b['text']}
+          --- FIM B ---
+
+          Faça uma síntese crítica: 1 consenso, 1 discordância útil e UMA decisão mínima para a próxima etapa do ambiente. Não altere THOTH.
+          Responda em português, até 150 palavras, começando exatamente com ACK THOTH-EXT-C-04."""
+
+          c=None
+          c_idx=None
+          for idx,spec in enumerate(PROVIDERS):
+              if idx in (a_idx,b_idx): continue
+              c=call_first(spec,c_prompt,attempts,"C")
+              if c:
+                  c_idx=idx
+                  break
+
+          now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          transcript={
+              "experiment_id":"THOTH-NEW-POINT-004",
+              "timestamp_utc":now,
+              "transport":"GitHub Actions hosted runner -> independent keyless OpenAI-compatible provider APIs",
+              "thoth_web_dependency":False,
+              "vps_dependency":False,
+              "phase":"communication-only",
+              "ia_a":a,
+              "ia_b":b,
+              "ia_c":c,
+              "proof":{
+                  "b_received_a_verbatim":a["text"] in b_prompt,
+                  "a_b_independent_endpoint_hosts":a["endpoint_host"]!=b["endpoint_host"],
+                  "a_b_provider_labels_distinct":a["provider"]!=b["provider"],
+                  "c_received_a_and_b_verbatim":bool(c) and a["text"] in c_prompt and b["text"] in c_prompt,
+                  "three_independent_endpoint_hosts":bool(c) and len({a["endpoint_host"],b["endpoint_host"],c["endpoint_host"]})==3,
+                  "ack_a":a["text"].startswith("ACK THOTH-EXT-A-04"),
+                  "ack_b":b["text"].startswith("ACK THOTH-EXT-B-04"),
+                  "ack_c":bool(c) and c["text"].startswith("ACK THOTH-EXT-C-04"),
+              },
+              "attempts":attempts,
+          }
+          pathlib.Path("lab/thoth-mesa/transcript-keyless.json").write_text(
+              json.dumps(transcript,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+
+          c_block=""
+          if c:
+              c_block=f"""
+          ## IA-C
+          - Provider route: **{c['provider']}**
+          - Endpoint host: `{c['endpoint_host']}`
+          - Requested model: `{c['requested_model']}`
+          - Response model: `{c.get('response_model')}`
+
+          {c['text']}
+          """
+
+          p=transcript["proof"]
+          md=f"""# THOTH Multi-AI External Dialogue — Proof 004
+
+          **Timestamp UTC:** {now}
+          **Transport:** GitHub Actions hosted runner → direct external model APIs
+          **THOTH WEB in critical path:** NO
+          **Current VPS in critical path:** NO
+          **Phase:** Communication only. No THOTH application code changed.
+
+          ## IA-A
+          - Provider route: **{a['provider']}**
+          - Endpoint host: `{a['endpoint_host']}`
+          - Requested model: `{a['requested_model']}`
+          - Response model: `{a.get('response_model')}`
+
+          {a['text']}
+
+          ## IA-B
+          - Provider route: **{b['provider']}**
+          - Endpoint host: `{b['endpoint_host']}`
+          - Requested model: `{b['requested_model']}`
+          - Response model: `{b.get('response_model')}`
+
+          {b['text']}
+          {c_block}
+
+          ## Proof checks
+          - IA-B received IA-A verbatim: **{p['b_received_a_verbatim']}**
+          - IA-A and IA-B used independent endpoint hosts: **{p['a_b_independent_endpoint_hosts']}**
+          - IA-A and IA-B provider labels distinct: **{p['a_b_provider_labels_distinct']}**
+          - IA-C received A+B verbatim: **{p['c_received_a_and_b_verbatim']}**
+          - Three independent endpoint hosts: **{p['three_independent_endpoint_hosts']}**
+          - A ACK: **{p['ack_a']}**
+          - B ACK: **{p['ack_b']}**
+          - C ACK: **{p['ack_c']}**
+          - Machine-readable transcript: `transcript-keyless.json`
+          """
+          pathlib.Path("lab/thoth-mesa/PROOF-004.md").write_text(md,encoding="utf-8")
+          print("\nFINAL_PROOF\n"+json.dumps(transcript,ensure_ascii=False,indent=2),flush=True)
+          PY
+          python /tmp/keyless_dialogue.py
+
+      - name: Persist proof on isolated lab branch
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Lab"
+          git config user.email "thoth-mesa-lab@users.noreply.github.com"
+          git add lab/thoth-mesa/
+          git commit -m "lab: persist direct multi-provider AI dialogue proof"
+          git push origin HEAD:lab/thoth-mesa-keyless-direct
