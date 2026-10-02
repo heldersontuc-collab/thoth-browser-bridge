@@ -1,0 +1,223 @@
+name: THOTH Mesa Phase2 Architecture Council
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-phase2-architecture
+
+permissions:
+  contents: write
+
+jobs:
+  council:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-phase2-architecture
+
+      - name: Run multi-AI architecture council
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          cat > /tmp/council.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, datetime, time
+
+          ENDPOINT="https://api.llm7.io/v1/chat/completions"
+          HEADERS={"Content-Type":"application/json","Accept":"application/json","User-Agent":"THOTH-MESA-PHASE2/1.0"}
+
+          def call(model,prompt,max_tokens=700):
+              req=urllib.request.Request(
+                  ENDPOINT,
+                  data=json.dumps({
+                      "model":model,
+                      "messages":[{"role":"user","content":prompt}],
+                      "temperature":0.18,
+                      "max_tokens":max_tokens,
+                      "stream":False
+                  }).encode(),
+                  headers=HEADERS,
+                  method="POST"
+              )
+              start=time.time()
+              try:
+                  with urllib.request.urlopen(req,timeout=150) as resp:
+                      obj=json.loads(resp.read().decode("utf-8","replace"))
+                      content=obj["choices"][0]["message"]["content"]
+                      if isinstance(content,list):
+                          content="\n".join(str(x.get("text",x)) if isinstance(x,dict) else str(x) for x in content)
+                      return {
+                          "ok":True,
+                          "requested_model":model,
+                          "response_model":obj.get("model") or model,
+                          "http_status":resp.status,
+                          "latency_s":round(time.time()-start,3),
+                          "text":str(content).strip(),
+                          "usage":obj.get("usage")
+                      }
+              except urllib.error.HTTPError as e:
+                  raw=e.read().decode("utf-8","replace")
+                  retry=None
+                  try: retry=json.loads(raw).get("error",{}).get("retry_after")
+                  except Exception: pass
+                  return {"ok":False,"requested_model":model,"http_status":e.code,"error":raw[:2500],"retry_after":retry}
+              except Exception as e:
+                  return {"ok":False,"requested_model":model,"http_status":0,"error":repr(e)}
+
+          def get_one(models,prompt,role,used=None):
+              used=set(used or [])
+              attempts=[]
+              for model in models:
+                  r=call(model,prompt)
+                  attempts.append({k:v for k,v in r.items() if k not in ("text","usage")})
+                  print(json.dumps({"role":role,"attempt":attempts[-1]},ensure_ascii=False),flush=True)
+                  if r.get("ok") and r.get("text"):
+                      actual=r.get("response_model") or r.get("requested_model")
+                      if actual not in used:
+                          return r,attempts
+                  wait=r.get("retry_after")
+                  time.sleep(min(int(wait)+2,65) if wait else 8)
+              return None,attempts
+
+          shared="""CONTEXTO COMPROVADO:
+          - O THOTH WEB não pode ser o canal crítico.
+          - A VPS atual não deve carregar inferência pesada nem o histórico principal.
+          - Já foi provado diálogo entre 3 modelos diferentes fora da VPS.
+          - Já foi provada retomada em runner novo, lendo checkpoint persistido, sem executar novamente a etapa anterior.
+          - Nesta Fase 2 ainda NÃO vamos trabalhar no código do THOTH.
+          OBJETIVO: projetar uma Sala de Engenharia Multi-IA externa, persistente, auditável e segura.
+          REQUISITOS OBRIGATÓRIOS:
+          chat/fórum em threads; event log append-only; tarefas/decisões/hipóteses/testes/artefatos separados; proveniência por mensagem; idempotency keys; checkpoints; RBAC; segredos fora dos agentes; orçamento/rate limit por modelo/tarefa; adapters de provedores; nenhum agente escreve em produção; aprovação humana para ações importantes; artefatos fora da VPS; observabilidade; recuperação; UI onde tudo importante aparece.
+          Evite Kubernetes/Kafka e outras peças pesadas sem necessidade comprovada. Preferir serviços gerenciados e componentes simples no início."""
+
+          prompt_a=shared+"""
+
+          PAPEL A — ARQUITETA DA PLATAFORMA.
+          Proponha a arquitetura mínima da Sala. Escolha componentes concretos por categoria (frontend, API/orquestrador, banco/event log, fila, objetos, auth, secrets, observabilidade, gateway de modelos). Para cada escolha diga por que é mínima e o que NÃO instalar ainda. Dê o fluxo de uma mensagem IA→IA.
+          Responda em português, até 500 palavras. Comece exatamente: ACK PHASE2-ARCH-A-001"""
+
+          a,aa=get_one(["mistral-Nemo-Instruct-2407","mistral-Small-24B-Instruct-2501"],prompt_a,"A")
+          if not a: raise SystemExit("Architect A failed")
+
+          prompt_b=shared+f"""
+
+          PAPEL B — SEGURANÇA E RESILIÊNCIA.
+          A Arquiteta A propôs:
+          --- A ---
+          {a['text']}
+          --- FIM A ---
+
+          Tente quebrar esse desenho. Aponte riscos de prompt injection entre agentes, memória corrompida, roubo de segredo, escrita duplicada, replay, spoofing de identidade de modelo, perda de proveniência, queda do coordenador, custo descontrolado e indisponibilidade de provedor. Proponha controles mínimos, não um castelo de complexidade.
+          Responda em português, até 500 palavras. Comece exatamente: ACK PHASE2-ARCH-B-001"""
+
+          b,bb=get_one(["DeepSeek-V4-Flash-0731","deepseek-v4-flash:0731"],prompt_b,"B",{a["response_model"]})
+          if not b: raise SystemExit("Reviewer B failed")
+
+          prompt_c=shared+f"""
+
+          PAPEL C — CUSTO E SIMPLICIDADE.
+          Você recebeu A e B:
+
+          --- A ---
+          {a['text']}
+          --- FIM A ---
+
+          --- B ---
+          {b['text']}
+          --- FIM B ---
+
+          Corte sobreengenharia. Compare managed Postgres versus CockroachDB, Redis/queue versus fila no próprio Postgres, S3/R2, Vercel/Cloudflare, LiteLLM/OpenRouter versus gateway próprio. Recomende o menor conjunto que aguenta nosso estágio, com caminho de crescimento sem reescrita total.
+          Responda em português, até 450 palavras. Comece exatamente: ACK PHASE2-ARCH-C-001"""
+
+          c,cc=get_one(["default","minimax-m2.7","codestral-latest"],prompt_c,"C",{a["response_model"],b["response_model"]})
+          if not c: raise SystemExit("Reviewer C failed")
+
+          prompt_d=shared+f"""
+
+          PAPEL D — INTEGRADORA / ADR.
+          A seguir estão três pareceres independentes.
+
+          === A ARQUITETA ===
+          {a['text']}
+          === FIM A ===
+
+          === B SEGURANÇA ===
+          {b['text']}
+          === FIM B ===
+
+          === C CUSTO/SIMPLICIDADE ===
+          {c['text']}
+          === FIM C ===
+
+          Produza ADR-001 com:
+          1. arquitetura escolhida agora;
+          2. componentes explicitamente adiados;
+          3. contratos de dados mínimos: Message, Task, Decision, Artifact, ModelInvocation e Checkpoint;
+          4. fluxo de mensagem IA→IA;
+          5. controles de segurança;
+          6. critérios objetivos de conclusão da Fase 2;
+          7. ordem exata de construção em no máximo 8 passos.
+          Não proponha tocar no THOTH ainda.
+          Responda em português, até 750 palavras. Comece exatamente: ACK PHASE2-ADR-001"""
+
+          time.sleep(8)
+          d,dd=get_one(["codestral-latest","default","mistral-Nemo-Instruct-2407"],prompt_d,"D")
+          if not d: raise SystemExit("Integrator D failed")
+
+          now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          council={
+              "council_id":"THOTH-PHASE2-ARCH-001",
+              "timestamp_utc":now,
+              "thoth_web_dependency":False,
+              "vps_dependency":False,
+              "thoth_code_touched":False,
+              "members":{
+                  "A":{"role":"platform_architect",**a},
+                  "B":{"role":"security_resilience",**b},
+                  "C":{"role":"cost_simplicity",**c},
+                  "D":{"role":"integrator_adr",**d}
+              },
+              "checks":{
+                  "b_received_a_verbatim":a["text"] in prompt_b,
+                  "c_received_a_b_verbatim":a["text"] in prompt_c and b["text"] in prompt_c,
+                  "d_received_all_verbatim":all(x["text"] in prompt_d for x in (a,b,c)),
+                  "a_b_c_distinct_models":len({a["response_model"],b["response_model"],c["response_model"]})==3,
+                  "ack_a":a["text"].startswith("ACK PHASE2-ARCH-A-001"),
+                  "ack_b":b["text"].startswith("ACK PHASE2-ARCH-B-001"),
+                  "ack_c":c["text"].startswith("ACK PHASE2-ARCH-C-001"),
+                  "ack_d":d["text"].startswith("ACK PHASE2-ADR-001")
+              },
+              "attempts":{"A":aa,"B":bb,"C":cc,"D":dd}
+          }
+          pathlib.Path("lab/thoth-mesa/phase2/ARCHITECTURE-COUNCIL-001.json").write_text(
+              json.dumps(council,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          pathlib.Path("lab/thoth-mesa/phase2/ADR-001.md").write_text(
+              "# THOTH Mesa — ADR-001\n\n"+
+              f"**UTC:** {now}\n\n"+
+              f"**A model:** {a['response_model']}\n\n{a['text']}\n\n"+
+              f"**B model:** {b['response_model']}\n\n{b['text']}\n\n"+
+              f"**C model:** {c['response_model']}\n\n{c['text']}\n\n"+
+              f"## Integrated ADR\n\n**D model:** {d['response_model']}\n\n{d['text']}\n\n"+
+              "## Evidence checks\n"+
+              "\n".join(f"- {k}: **{v}**" for k,v in council["checks"].items())+"\n",
+              encoding="utf-8"
+          )
+          print(json.dumps({
+              "council_id":council["council_id"],
+              "models":[a["response_model"],b["response_model"],c["response_model"],d["response_model"]],
+              "checks":council["checks"]
+          },ensure_ascii=False,indent=2))
+          PY
+          python /tmp/council.py
+
+      - name: Persist council and ADR
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Phase2"
+          git config user.email "thoth-mesa-phase2@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/
+          git commit -m "lab: persist phase2 architecture council ADR-001"
+          git push origin HEAD:lab/thoth-mesa-phase2-architecture
