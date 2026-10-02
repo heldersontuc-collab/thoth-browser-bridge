@@ -1,4 +1,4 @@
-name: THOTH Mesa Anonymous Routed Dialogue
+name: THOTH Mesa Three-Model Dialogue
 
 on:
   push:
@@ -12,32 +12,32 @@ jobs:
   dialogue:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
           ref: lab/thoth-mesa-keyless-direct
 
-      - name: Run real routed model-to-model dialogue
+      - name: Run Codestral to Mistral to third-family dialogue
         shell: bash
         run: |
           mkdir -p lab/thoth-mesa
-          cat > /tmp/routed_dialogue.py <<'PY'
+          cat > /tmp/three_model_dialogue.py <<'PY'
           import json, urllib.request, urllib.error, pathlib, datetime, time
 
           ENDPOINT="https://api.llm7.io/v1/chat/completions"
           HEADERS={
               "Content-Type":"application/json",
               "Accept":"application/json",
-              "User-Agent":"THOTH-MESA-LAB/0.7",
+              "User-Agent":"THOTH-MESA-LAB/0.9",
           }
 
-          def call(selector,prompt):
+          def call(model,prompt,max_tokens=320):
               payload={
-                  "model":selector,
+                  "model":model,
                   "messages":[{"role":"user","content":prompt}],
                   "temperature":0.15,
-                  "max_tokens":320,
+                  "max_tokens":max_tokens,
                   "stream":False,
               }
               req=urllib.request.Request(
@@ -48,7 +48,7 @@ jobs:
               )
               start=time.time()
               try:
-                  with urllib.request.urlopen(req,timeout=100) as resp:
+                  with urllib.request.urlopen(req,timeout=120) as resp:
                       raw=resp.read().decode("utf-8","replace")
                       obj=json.loads(raw)
                       content=obj["choices"][0]["message"]["content"]
@@ -56,106 +56,135 @@ jobs:
                           content="\n".join(str(x.get("text",x)) if isinstance(x,dict) else str(x) for x in content)
                       return {
                           "ok":True,
-                          "selector":selector,
-                          "response_model":obj.get("model"),
                           "http_status":resp.status,
+                          "requested_model":model,
+                          "response_model":obj.get("model"),
                           "latency_s":round(time.time()-start,3),
                           "text":str(content).strip(),
                           "usage":obj.get("usage"),
                       }
               except urllib.error.HTTPError as e:
                   raw=e.read().decode("utf-8","replace")
-                  return {"ok":False,"selector":selector,"http_status":e.code,"latency_s":round(time.time()-start,3),"error":raw[:2500]}
+                  retry_after=None
+                  try:
+                      body=json.loads(raw)
+                      retry_after=body.get("error",{}).get("retry_after")
+                  except Exception:
+                      pass
+                  return {
+                      "ok":False,"http_status":e.code,"requested_model":model,
+                      "latency_s":round(time.time()-start,3),"error":raw[:2500],
+                      "retry_after":retry_after
+                  }
               except Exception as e:
-                  return {"ok":False,"selector":selector,"http_status":0,"latency_s":round(time.time()-start,3),"error":repr(e)}
+                  return {
+                      "ok":False,"http_status":0,"requested_model":model,
+                      "latency_s":round(time.time()-start,3),"error":repr(e)
+                  }
 
-          def log_attempt(phase,r,attempts):
-              compact={k:v for k,v in r.items() if k not in ("text","usage")}
-              attempts.append({"phase":phase,**compact})
-              print(json.dumps({"phase":phase,"attempt":compact},ensure_ascii=False),flush=True)
+          def attempt(models,prompt,phase,attempts,forbidden_models=None):
+              forbidden_models=set(forbidden_models or [])
+              for model in models:
+                  r=call(model,prompt)
+                  compact={k:v for k,v in r.items() if k not in ("text","usage")}
+                  attempts.append({"phase":phase,**compact})
+                  print(json.dumps({"phase":phase,"attempt":compact},ensure_ascii=False),flush=True)
+                  if r.get("ok") and r.get("text"):
+                      actual=r.get("response_model") or r.get("requested_model")
+                      if actual not in forbidden_models:
+                          return r
+                  wait=r.get("retry_after")
+                  if wait:
+                      time.sleep(min(int(wait)+2,65))
+                  else:
+                      time.sleep(8)
+              return None
 
           attempts=[]
-          prompt_a="""ID THOTH-EXT-A-08. Você é IA-A numa conversa técnica entre IAs.
-          Estamos projetando uma sala externa persistente para várias IAs colaborarem. THOTH WEB deve ser apenas ferramenta auxiliar, nunca caminho crítico. A VPS atual não deve carregar inferência pesada nem o histórico principal.
+
+          prompt_a="""ID THOTH-EXT-A-09. Você é IA-A numa mesa de engenharia multi-IA.
+          Estamos projetando uma sala externa persistente para várias IAs colaborarem. THOTH WEB deve ser apenas ferramenta auxiliar e jamais caminho crítico. A VPS atual não deve hospedar inferência pesada nem o histórico principal.
           Requisitos: memória com proveniência, tarefas com estados explícitos, auditoria, retomada sem duplicação, limites de custo/rate, visibilidade humana e nenhuma escrita direta em produção.
-          Fase atual: arquitetura da sala apenas. Não altere o THOTH.
-          Proponha a MENOR arquitetura viável e a falha mais importante a testar primeiro.
-          Responda em português, até 160 palavras, começando exatamente com ACK THOTH-EXT-A-08."""
+          Fase atual: arquitetura da sala apenas. Não altere THOTH.
+          Proponha a MENOR arquitetura viável e indique a falha mais importante a testar primeiro.
+          Responda em português, até 150 palavras, começando exatamente com ACK THOTH-EXT-A-09."""
 
-          a=None
-          for selector in ["default","fast","default"]:
-              r=call(selector,prompt_a); log_attempt("A",r,attempts)
-              if r.get("ok") and r.get("text") and r.get("response_model"):
-                  a=r; break
-              time.sleep(2)
+          a=attempt(["default"],prompt_a,"A",attempts)
           if not a:
-              pathlib.Path("lab/thoth-mesa/routed-failure.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
-              raise SystemExit("IA-A routed call failed")
+              raise SystemExit("IA-A failed")
 
-          prompt_b=f"""ID THOTH-EXT-B-08. Você é IA-B, outra IA revisora. A IA-A acabou de responder:
+          prompt_b=f"""ID THOTH-EXT-B-09. Você é IA-B, revisora de outra família.
+          IA-A respondeu exatamente:
 
-          --- RESPOSTA EXATA DA IA-A ({a['response_model']}) ---
+          --- IA-A ({a.get('response_model')}) ---
           {a['text']}
-          --- FIM DA IA-A ---
+          --- FIM IA-A ---
 
-          Responda DIRETAMENTE ao que ela propôs. Diga 1 ponto que manteria, 1 que mudaria e proponha UM teste falsificável de retomada após queda do coordenador sem duplicar tarefas. THOTH WEB deve permanecer fora do caminho crítico. Não altere THOTH.
-          Responda em português, até 160 palavras, começando exatamente com ACK THOTH-EXT-B-08."""
+          Responda DIRETAMENTE. Diga 1 ponto que manteria, 1 que mudaria e proponha UM teste falsificável de retomada após queda do coordenador sem duplicar tarefas. THOTH WEB deve ficar fora do caminho crítico. Não altere THOTH.
+          Responda em português, até 150 palavras, começando exatamente com ACK THOTH-EXT-B-09."""
 
-          b=None
-          for selector in ["gemini-3.7-flash","mistral-Nemo-Instruct-2407","DeepSeek-V4-Flash-0731"]:
-              time.sleep(2)
-              r=call(selector,prompt_b); log_attempt("B",r,attempts)
-              if not (r.get("ok") and r.get("text") and r.get("response_model")):
-                  continue
-              if r["response_model"] == a["response_model"]:
-                  print("B returned same underlying model; retrying for model diversity.",flush=True)
-                  continue
-              b=r; break
+          time.sleep(8)
+          b=attempt(
+              ["mistral-Nemo-Instruct-2407","mistral-Small-24B-Instruct-2501"],
+              prompt_b,"B",attempts,
+              forbidden_models={a.get("response_model")}
+          )
           if not b:
-              pathlib.Path("lab/thoth-mesa/routed-failure.json").write_text(json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8")
-              raise SystemExit("Could not obtain IA-B from a distinct response_model")
+              raise SystemExit("IA-B distinct Mistral family failed")
 
-          prompt_c=f"""ID THOTH-EXT-C-08. Você é IA-C, terceira revisora.
+          prompt_c=f"""ID THOTH-EXT-C-09. Você é IA-C, terceira revisora de uma família diferente.
 
-          IA-A ({a['response_model']}):
+          IA-A ({a.get('response_model')}):
           --- A ---
           {a['text']}
           --- FIM A ---
 
-          IA-B ({b['response_model']}):
+          IA-B ({b.get('response_model')}):
           --- B ---
           {b['text']}
           --- FIM B ---
 
-          Sintetize o diálogo: 1 consenso, 1 discordância útil e UMA decisão mínima para a próxima etapa da sala. Não altere THOTH.
-          Responda em português, até 140 palavras, começando exatamente com ACK THOTH-EXT-C-08."""
+          Faça uma síntese crítica: 1 consenso, 1 discordância útil e UMA decisão mínima para a próxima etapa da sala de engenharia. Não altere THOTH.
+          Responda em português, até 140 palavras, começando exatamente com ACK THOTH-EXT-C-09."""
 
-          c=None
-          for selector in ["default","fast","default"]:
-              time.sleep(2)
-              r=call(selector,prompt_c); log_attempt("C",r,attempts)
-              if not (r.get("ok") and r.get("text") and r.get("response_model")):
-                  continue
-              if r["response_model"] in {a["response_model"],b["response_model"]}:
-                  continue
-              c=r; break
+          time.sleep(8)
+          forbidden={a.get("response_model"),b.get("response_model")}
+          c=attempt(
+              ["DeepSeek-V4-Flash-0731","minimax-m2.7","gemini-3-flash","gemini-3.1-flash-lite"],
+              prompt_c,"C",attempts,
+              forbidden_models=forbidden
+          )
+          if not c:
+              pathlib.Path("lab/thoth-mesa/attempts-009.json").write_text(
+                  json.dumps(attempts,ensure_ascii=False,indent=2),encoding="utf-8"
+              )
+              raise SystemExit("Could not obtain third distinct AI family")
 
           now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+          actuals=[
+              a.get("response_model") or a.get("requested_model"),
+              b.get("response_model") or b.get("requested_model"),
+              c.get("response_model") or c.get("requested_model"),
+          ]
           checks={
               "b_received_a_verbatim":a["text"] in prompt_b,
-              "a_b_response_models_distinct":a["response_model"]!=b["response_model"],
-              "c_received_a_and_b_verbatim":bool(c) and a["text"] in prompt_c and b["text"] in prompt_c,
-              "three_response_models_distinct":bool(c) and len({a["response_model"],b["response_model"],c["response_model"]})==3,
-              "ack_a":a["text"].startswith("ACK THOTH-EXT-A-08"),
-              "ack_b":b["text"].startswith("ACK THOTH-EXT-B-08"),
-              "ack_c":bool(c) and c["text"].startswith("ACK THOTH-EXT-C-08"),
-              "minimum_external_dialogue_proven": bool(a["text"] and b["text"] and a["text"] in prompt_b and a["response_model"]!=b["response_model"]),
+              "c_received_a_and_b_verbatim":a["text"] in prompt_c and b["text"] in prompt_c,
+              "three_models_distinct":len(set(actuals))==3,
+              "ack_a":a["text"].startswith("ACK THOTH-EXT-A-09"),
+              "ack_b":b["text"].startswith("ACK THOTH-EXT-B-09"),
+              "ack_c":c["text"].startswith("ACK THOTH-EXT-C-09"),
+              "three_ai_dialogue_proven":(
+                  a["text"] in prompt_b and
+                  a["text"] in prompt_c and
+                  b["text"] in prompt_c and
+                  len(set(actuals))==3
+              )
           }
-          transcript={
-              "experiment_id":"THOTH-NEW-POINT-008",
+
+          proof={
+              "experiment_id":"THOTH-NEW-POINT-009",
               "timestamp_utc":now,
-              "transport":"GitHub Actions hosted runner -> LLM7 anonymous dynamic router",
-              "endpoint":"api.llm7.io",
+              "transport":"GitHub Actions hosted runner -> LLM7 anonymous/direct model routing",
               "thoth_web_dependency":False,
               "vps_dependency":False,
               "phase":"communication-only",
@@ -165,58 +194,46 @@ jobs:
               "checks":checks,
               "attempts":attempts,
           }
-          pathlib.Path("lab/thoth-mesa/transcript-routed-008.json").write_text(
-              json.dumps(transcript,ensure_ascii=False,indent=2),encoding="utf-8"
+          pathlib.Path("lab/thoth-mesa/transcript-009.json").write_text(
+              json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
           )
 
-          cblock=""
-          if c:
-              cblock=f"""
-          ## IA-C
-          - Router selector: `{c['selector']}`
-          - Actual response model: `{c['response_model']}`
-          - HTTP {c['http_status']} · {c['latency_s']} s
-
-          {c['text']}
-          """
-
-          md=f"""# THOTH Multi-AI External Dialogue — Proof 008
+          md=f"""# THOTH Multi-AI External Dialogue — Proof 009
 
           **UTC:** {now}
-          **Transport:** GitHub Actions hosted runner → anonymous dynamic LLM router
           **THOTH WEB dependency:** NO
           **VPS dependency:** NO
           **THOTH code touched:** NO
 
           ## IA-A
-          - Router selector: `{a['selector']}`
-          - Actual response model: `{a['response_model']}`
+          - Actual model: `{actuals[0]}`
           - HTTP {a['http_status']} · {a['latency_s']} s
 
           {a['text']}
 
           ## IA-B
-          - Router selector: `{b['selector']}`
-          - Actual response model: `{b['response_model']}`
+          - Actual model: `{actuals[1]}`
           - HTTP {b['http_status']} · {b['latency_s']} s
 
           {b['text']}
-          {cblock}
 
-          ## Falsifiable checks
-          - B received A verbatim: **{checks['b_received_a_verbatim']}**
-          - A/B actual response models distinct: **{checks['a_b_response_models_distinct']}**
-          - C received A+B verbatim: **{checks['c_received_a_and_b_verbatim']}**
-          - Three actual models distinct: **{checks['three_response_models_distinct']}**
-          - A ACK: **{checks['ack_a']}**
-          - B ACK: **{checks['ack_b']}**
-          - C ACK: **{checks['ack_c']}**
-          - Minimum external dialogue proven: **{checks['minimum_external_dialogue_proven']}**
+          ## IA-C
+          - Actual model: `{actuals[2]}`
+          - HTTP {c['http_status']} · {c['latency_s']} s
+
+          {c['text']}
+
+          ## Checks
+          - B recebeu A verbatim: **{checks['b_received_a_verbatim']}**
+          - C recebeu A+B verbatim: **{checks['c_received_a_and_b_verbatim']}**
+          - Três modelos distintos: **{checks['three_models_distinct']}**
+          - ACK A/B/C: **{checks['ack_a']} / {checks['ack_b']} / {checks['ack_c']}**
+          - Diálogo real de três IAs comprovado: **{checks['three_ai_dialogue_proven']}**
           """
-          pathlib.Path("lab/thoth-mesa/PROOF-008.md").write_text(md,encoding="utf-8")
-          print("\nFINAL_PROOF\n"+json.dumps(transcript,ensure_ascii=False,indent=2),flush=True)
+          pathlib.Path("lab/thoth-mesa/PROOF-009.md").write_text(md,encoding="utf-8")
+          print("\nFINAL_PROOF\n"+json.dumps(proof,ensure_ascii=False,indent=2),flush=True)
           PY
-          python /tmp/routed_dialogue.py
+          python /tmp/three_model_dialogue.py
 
       - name: Persist proof on isolated lab branch
         shell: bash
@@ -224,5 +241,5 @@ jobs:
           git config user.name "THOTH Mesa Lab"
           git config user.email "thoth-mesa-lab@users.noreply.github.com"
           git add lab/thoth-mesa/
-          git commit -m "lab: persist anonymous routed multi-model dialogue proof"
+          git commit -m "lab: persist three-model dialogue proof 009"
           git push origin HEAD:lab/thoth-mesa-keyless-direct
