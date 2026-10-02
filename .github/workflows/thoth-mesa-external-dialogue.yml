@@ -1,0 +1,237 @@
+name: THOTH Mesa External Dialogue
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-llmfaucet
+
+permissions:
+  contents: write
+
+jobs:
+  dialogue:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-llmfaucet
+
+      - name: Run real multi-model dialogue through keyless external gateway
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa
+          cat > /tmp/dialogue.py <<'PY'
+          import json, urllib.request, urllib.error, datetime, pathlib, time
+
+          BASE = "https://api.llmfaucet.dev/v1"
+          HEADERS = {
+              "Authorization": "Bearer free",
+              "Content-Type": "application/json",
+              "User-Agent": "THOTH-MESA-LAB/0.1"
+          }
+
+          def request_json(url, method="GET", payload=None, timeout=120):
+              data = None if payload is None else json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as resp:
+                      raw = resp.read().decode("utf-8", "replace")
+                      return {
+                          "ok": True,
+                          "status": resp.status,
+                          "headers": {k.lower(): v for k, v in resp.headers.items()},
+                          "json": json.loads(raw)
+                      }
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode("utf-8", "replace")
+                  try:
+                      body = json.loads(raw)
+                  except Exception:
+                      body = {"raw": raw}
+                  return {"ok": False, "status": e.code, "headers": dict(e.headers.items()), "json": body}
+              except Exception as e:
+                  return {"ok": False, "status": 0, "headers": {}, "json": {"error": repr(e)}}
+
+          models_resp = request_json(BASE + "/models")
+          if not models_resp["ok"]:
+              raise SystemExit("models endpoint failed: " + json.dumps(models_resp, ensure_ascii=False))
+
+          models = models_resp["json"].get("data", [])
+          snapshot = []
+          seen_provider = set()
+          candidates = []
+          for m in models:
+              mid = str(m.get("id", ""))
+              if not mid or mid.startswith("auto"):
+                  continue
+              provider = str(m.get("owned_by") or m.get("provider") or mid.split("/", 1)[0])
+              snapshot.append({
+                  "id": mid,
+                  "provider": provider,
+                  "capabilities": m.get("capabilities")
+              })
+              if provider not in seen_provider:
+                  seen_provider.add(provider)
+                  candidates.append((mid, provider))
+
+          pathlib.Path("lab/thoth-mesa/models-snapshot.json").write_text(
+              json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+
+          prompt_a = """ID THOTH-EXT-A-01. Você é IA-A em um diálogo de engenharia entre modelos diferentes.
+          Estamos projetando uma sala externa e persistente para várias IAs colaborarem. O THOTH WEB NÃO pode ser dependência do canal; deve ser apenas uma ferramenta auxiliar de acesso. Armazenamento pesado e inferência devem ficar fora da VPS atual.
+          Requisitos: proveniência persistente, estado de tarefas, auditoria, retomada segura, limites de custo/rate, visibilidade humana e nenhum agente escrevendo em produção.
+          Fase atual: discutir a arquitetura da sala, sem alterar o THOTH.
+          Proponha a MENOR arquitetura viável e identifique a falha mais importante a testar primeiro.
+          Responda em português, até 220 palavras, começando exatamente com ACK THOTH-EXT-A-01."""
+
+          def call_model(model, prompt):
+              r = request_json(BASE + "/chat/completions", "POST", {
+                  "model": model,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.2,
+                  "max_tokens": 420,
+                  "stream": False
+              })
+              if not r["ok"]:
+                  return None, r
+              j = r["json"]
+              try:
+                  text = j["choices"][0]["message"]["content"]
+              except Exception:
+                  return None, r
+              return {
+                  "requested_model": model,
+                  "response_model": j.get("model"),
+                  "routed_via": r["headers"].get("x-routed-via"),
+                  "fallback_attempts": r["headers"].get("x-fallback-attempts"),
+                  "text": text,
+                  "usage": j.get("usage")
+              }, r
+
+          a = None
+          a_raw = None
+          attempts = []
+          for model, provider in candidates[:10]:
+              result, raw = call_model(model, prompt_a)
+              attempts.append({"phase": "A", "model": model, "catalog_provider": provider, "ok": bool(result), "status": raw.get("status")})
+              if result:
+                  a, a_raw = result, raw
+                  break
+              time.sleep(1)
+
+          if not a:
+              # Last-resort routed selector.
+              result, raw = call_model("auto:smart", prompt_a)
+              attempts.append({"phase": "A", "model": "auto:smart", "ok": bool(result), "status": raw.get("status")})
+              if not result:
+                  raise SystemExit("IA-A failed: " + json.dumps(attempts, ensure_ascii=False))
+              a, a_raw = result, raw
+
+          prompt_b = f"""ID THOTH-EXT-B-01. Você é IA-B, revisor independente em um diálogo real entre modelos.
+          A IA-A acabou de propor o seguinte:
+
+          --- MENSAGEM DA IA-A ---
+          {a['text']}
+          --- FIM DA MENSAGEM DA IA-A ---
+
+          Responda DIRETAMENTE à proposta da IA-A. Aponte 1 ponto que você manteria, 1 ponto que mudaria e proponha um teste falsificável de retomada após queda do coordenador sem duplicar tarefas.
+          O THOTH WEB deve permanecer fora do caminho crítico. Não altere o THOTH nesta fase.
+          Responda em português, até 220 palavras, começando exatamente com ACK THOTH-EXT-B-01."""
+
+          b = None
+          b_raw = None
+          # Prefer a catalog provider different from IA-A's actual route.
+          preferred = []
+          deferred = []
+          for model, provider in candidates[:16]:
+              if model == a["requested_model"]:
+                  continue
+              if a.get("routed_via") and provider == a.get("routed_via"):
+                  deferred.append((model, provider))
+              else:
+                  preferred.append((model, provider))
+
+          for model, provider in (preferred + deferred):
+              result, raw = call_model(model, prompt_b)
+              attempts.append({"phase": "B", "model": model, "catalog_provider": provider, "ok": bool(result), "status": raw.get("status")})
+              if result:
+                  # Require different actual provider when possible.
+                  if a.get("routed_via") and result.get("routed_via") == a.get("routed_via"):
+                      continue
+                  b, b_raw = result, raw
+                  break
+              time.sleep(1)
+
+          if not b:
+              result, raw = call_model("auto:fast", prompt_b)
+              attempts.append({"phase": "B", "model": "auto:fast", "ok": bool(result), "status": raw.get("status")})
+              if not result:
+                  raise SystemExit("IA-B failed: " + json.dumps(attempts, ensure_ascii=False))
+              b, b_raw = result, raw
+
+          now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+          transcript = {
+              "experiment_id": "THOTH-NEW-POINT-001",
+              "timestamp_utc": now,
+              "transport": "GitHub Actions runner -> llmfaucet public OpenAI-compatible gateway",
+              "thoth_web_dependency": False,
+              "phase": "communication-only",
+              "ia_a": a,
+              "ia_b": b,
+              "b_received_a_verbatim": a["text"] in prompt_b,
+              "provider_distinct": bool(a.get("routed_via") and b.get("routed_via") and a.get("routed_via") != b.get("routed_via")),
+              "attempts": attempts
+          }
+
+          pathlib.Path("lab/thoth-mesa/transcript.json").write_text(
+              json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          md = f"""# THOTH Multi-AI External Dialogue — Proof 001
+
+          **Timestamp UTC:** {now}
+          **Transport:** GitHub Actions runner → llmfaucet.dev
+          **THOTH WEB in critical path:** NO
+          **Phase:** Communication only. No THOTH code changed.
+
+          ## IA-A
+          - Requested model: `{a['requested_model']}`
+          - Response model: `{a.get('response_model')}`
+          - Routed via: `{a.get('routed_via')}`
+          - Fallback attempts: `{a.get('fallback_attempts')}`
+
+          {a['text']}
+
+          ## IA-B
+          - Requested model: `{b['requested_model']}`
+          - Response model: `{b.get('response_model')}`
+          - Routed via: `{b.get('routed_via')}`
+          - Fallback attempts: `{b.get('fallback_attempts')}`
+
+          {b['text']}
+
+          ## Proof checks
+          - IA-B received IA-A response verbatim: **{transcript['b_received_a_verbatim']}**
+          - Actual routed providers distinct: **{transcript['provider_distinct']}**
+          - Persistent machine-readable transcript: `transcript.json`
+          - Model catalog snapshot: `models-snapshot.json`
+          """
+          pathlib.Path("lab/thoth-mesa/PROOF-001.md").write_text(md, encoding="utf-8")
+          print(json.dumps(transcript, ensure_ascii=False, indent=2))
+          PY
+          python /tmp/dialogue.py
+
+      - name: Persist proof on isolated lab branch
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Lab"
+          git config user.email "thoth-mesa-lab@users.noreply.github.com"
+          git add lab/thoth-mesa/
+          if git diff --cached --quiet; then
+            echo "No new proof to commit."
+          else
+            git commit -m "lab: persist external multi-AI dialogue proof"
+            git push origin HEAD:lab/thoth-mesa-llmfaucet
+          fi
