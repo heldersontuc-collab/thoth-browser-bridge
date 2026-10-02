@@ -32,8 +32,11 @@ jobs:
               for p in root.rglob("*"):
                   if not p.is_file():
                       continue
-                  if root.name == "workflows" and not p.name.startswith("thoth-mesa"):
-                      continue
+                  if root.name == "workflows":
+                      if p.name == "thoth-mesa-public-safety.yml":
+                          continue
+                      if not p.name.startswith("thoth-mesa"):
+                          continue
                   files.append(p)
 
           patterns = {
