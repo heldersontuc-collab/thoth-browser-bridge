@@ -1,0 +1,156 @@
+name: THOTH Mesa AI Horde Route Discovery
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-route-discovery
+
+permissions:
+  contents: write
+
+jobs:
+  probe_horde:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-route-discovery
+
+      - name: Probe AI Horde anonymous text route
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          cat > /tmp/horde_probe.py <<'PY'
+          import json, urllib.request, urllib.error, pathlib, datetime, time
+
+          BASE="https://aihorde.net/api/v2"
+          HEADERS={
+            "Accept":"application/json",
+            "User-Agent":"THOTH-MESA-ROUTE-PROBE/1.0",
+            "Client-Agent":"THOTH-MESA:1.0:github-actions"
+          }
+
+          def req_json(url, method="GET", payload=None, timeout=30, extra=None):
+            headers=dict(HEADERS)
+            if extra: headers.update(extra)
+            data=None
+            if payload is not None:
+              headers["Content-Type"]="application/json"
+              data=json.dumps(payload).encode("utf-8")
+            req=urllib.request.Request(url,data=data,headers=headers,method=method)
+            try:
+              with urllib.request.urlopen(req,timeout=timeout) as resp:
+                raw=resp.read().decode("utf-8","replace")
+                return {"ok":True,"status":resp.status,"json":json.loads(raw)}
+            except urllib.error.HTTPError as e:
+              raw=e.read().decode("utf-8","replace")
+              try: body=json.loads(raw)
+              except Exception: body={"raw":raw[:1200]}
+              return {"ok":False,"status":e.code,"json":body}
+            except Exception as e:
+              return {"ok":False,"status":0,"json":{"error":repr(e)}}
+
+          proof={
+            "proof_id":"THOTH-ROUTE-DISCOVERY-HORDE-001",
+            "verified_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "credential_used":False,
+            "anonymous_key_used":True,
+            "catalog":None,
+            "selected_model":None,
+            "generation":None,
+            "route_live":False,
+            "thoth_web_dependency":False,
+            "vps_dependency":False,
+            "thoth_code_touched":False
+          }
+
+          catalog=req_json(BASE+"/status/models?type=text")
+          proof["catalog_status"]=catalog.get("status")
+          if not catalog["ok"]:
+            proof["catalog_error"]=catalog["json"]
+          else:
+            rows=catalog["json"] if isinstance(catalog["json"],list) else catalog["json"].get("models",[])
+            active=[]
+            for x in rows:
+              name=x.get("name") or x.get("model")
+              count=int(x.get("count") or 0)
+              queued=int(x.get("queued") or 0)
+              perf=float(x.get("performance") or 0)
+              if name and count>0:
+                active.append({
+                  "name":str(name),
+                  "count":count,
+                  "queued":queued,
+                  "performance":perf
+                })
+            active.sort(key=lambda x:(x["queued"],-x["count"],-x["performance"],x["name"]))
+            proof["catalog"]=active[:20]
+
+            if active:
+              model=active[0]["name"]
+              proof["selected_model"]=model
+              submit=req_json(
+                BASE+"/generate/async",
+                "POST",
+                {
+                  "prompt":"user: Reply exactly in Portuguese: ACK THOTH-HORDE-001",
+                  "models":[model],
+                  "params":{"n":1,"max_length":80,"max_context_length":1024,"temperature":0.1},
+                  "slow_workers":True
+                },
+                timeout=30,
+                extra={"apikey":"0000000000"}
+              )
+              proof["submit_status"]=submit.get("status")
+              if submit["ok"] and submit["json"].get("id"):
+                job_id=submit["json"]["id"]
+                proof["job_id"]=job_id
+                last=None
+                for poll in range(30):
+                  time.sleep(3)
+                  st=req_json(BASE+f"/generate/status/{job_id}",extra={"apikey":"0000000000"})
+                  last=st
+                  if not st["ok"]:
+                    continue
+                  data=st["json"]
+                  if data.get("faulted"):
+                    proof["generation"]={"faulted":True,"status":data}
+                    break
+                  if data.get("done"):
+                    gens=data.get("generations") or []
+                    if gens:
+                      g=gens[0]
+                      text=(g.get("text") or "").strip()
+                      proof["generation"]={
+                        "text":text,
+                        "model":g.get("model") or model,
+                        "worker_id":g.get("worker_id"),
+                        "worker_name":g.get("worker_name"),
+                        "state":g.get("state")
+                      }
+                      proof["route_live"]=bool(text)
+                    else:
+                      proof["generation"]={"done":True,"no_generation":True}
+                    break
+                else:
+                  proof["generation"]={"timeout":True,"last_status":last}
+              else:
+                proof["submit_error"]=submit["json"]
+
+          pathlib.Path("lab/thoth-mesa/phase2/ROUTE-DISCOVERY-HORDE-001.json").write_text(
+            json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+          python /tmp/horde_probe.py
+
+      - name: Persist probe
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Route Lab"
+          git config user.email "thoth-mesa-route@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/ROUTE-DISCOVERY-HORDE-001.json
+          git commit -m "lab: persist AI Horde route discovery"
+          git push origin HEAD:lab/thoth-mesa-route-discovery
