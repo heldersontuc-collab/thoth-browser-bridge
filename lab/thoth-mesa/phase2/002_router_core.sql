@@ -132,6 +132,7 @@ declare
   v_model_key text;
   v_health_state text;
   v_retry_after timestamptz;
+  v_fallback_index integer;
 begin
   select * into v_existing
   from thoth_mesa.routing_decisions
@@ -171,19 +172,17 @@ begin
     return v_decision;
   end if;
 
-  with candidates as (
+  with ranked as (
     select
       p.id as provider_id,
       m.id as model_id,
       p.provider_key,
       m.model_key,
-      p.priority,
-      coalesce(m.quality_tier,0) as quality_tier,
       h.state as health_state,
       h.retry_after,
       row_number() over (
         order by p.priority asc, coalesce(m.quality_tier,0) desc, m.model_key asc
-      ) - 1 as fallback_index
+      ) - 1 as preference_index
     from thoth_mesa.providers p
     join thoth_mesa.models m
       on m.provider_id=p.id
@@ -193,27 +192,32 @@ begin
       where ph.provider_id=p.id
         and (ph.model_id=m.id or ph.model_id is null)
       order by
-        case when ph.model_id=m.id then 0 else 1 end,
-        ph.observed_at desc
+        ph.observed_at desc,
+        case when ph.model_id=m.id then 0 else 1 end
       limit 1
     ) h on true
     where p.enabled
       and m.enabled
       and (p_requested_family is null or m.family=p_requested_family)
-      and (
-        h.state is null
-        or h.state in ('healthy','degraded','unknown')
-        or (
-          h.state in ('rate_limited','quota_exhausted','unavailable','auth_required')
-          and h.retry_after is not null
-          and h.retry_after <= now()
-        )
+  ),
+  eligible as (
+    select *
+    from ranked
+    where
+      health_state is null
+      or health_state in ('healthy','degraded','unknown')
+      or (
+        health_state in ('rate_limited','quota_exhausted','unavailable','auth_required')
+        and retry_after is not null
+        and retry_after <= now()
       )
   )
-  select provider_id,model_id,provider_key,model_key,health_state,retry_after
-  into v_provider_id,v_model_id,v_provider_key,v_model_key,v_health_state,v_retry_after
-  from candidates
-  order by fallback_index
+  select
+    provider_id,model_id,provider_key,model_key,health_state,retry_after,preference_index
+  into
+    v_provider_id,v_model_id,v_provider_key,v_model_key,v_health_state,v_retry_after,v_fallback_index
+  from eligible
+  order by preference_index
   limit 1;
 
   if v_model_id is null then
@@ -235,44 +239,20 @@ begin
     decision_key,thread_id,task_id,requested_family,
     selected_provider_id,selected_model_id,outcome,reason,fallback_index,snapshot
   )
-  select
+  values(
     p_decision_key,p_thread_id,p_task_id,p_requested_family,
-    c.provider_id,c.model_id,'selected',
+    v_provider_id,v_model_id,'selected',
     'selected healthiest eligible model within budget',
-    c.fallback_index,
+    v_fallback_index,
     jsonb_build_object(
-      'provider_key',c.provider_key,
-      'model_key',c.model_key,
-      'health_state',coalesce(c.health_state,'unobserved'),
-      'retry_after',c.retry_after,
+      'provider_key',v_provider_key,
+      'model_key',v_model_key,
+      'health_state',coalesce(v_health_state,'unobserved'),
+      'retry_after',v_retry_after,
       'spent_usd',v_spent,
       'budget_usd',v_budget
     )
-  from (
-    select
-      p.id as provider_id,
-      m.id as model_id,
-      p.provider_key,
-      m.model_key,
-      h.state as health_state,
-      h.retry_after,
-      row_number() over (
-        order by p.priority asc, coalesce(m.quality_tier,0) desc, m.model_key asc
-      ) - 1 as fallback_index
-    from thoth_mesa.providers p
-    join thoth_mesa.models m on m.provider_id=p.id
-    left join lateral (
-      select ph.state, ph.retry_after
-      from thoth_mesa.provider_health ph
-      where ph.provider_id=p.id
-        and (ph.model_id=m.id or ph.model_id is null)
-      order by
-        case when ph.model_id=m.id then 0 else 1 end,
-        ph.observed_at desc
-      limit 1
-    ) h on true
-    where p.id=v_provider_id and m.id=v_model_id
-  ) c
+  )
   returning * into v_decision;
 
   return v_decision;
