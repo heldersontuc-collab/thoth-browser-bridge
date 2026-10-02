@@ -1,0 +1,102 @@
+{
+  "experiment_id": "THOTH-NEW-POINT-008",
+  "timestamp_utc": "2026-10-02T07:52:18.795890+00:00",
+  "transport": "GitHub Actions hosted runner -> LLM7 anonymous dynamic router",
+  "endpoint": "api.llm7.io",
+  "thoth_web_dependency": false,
+  "vps_dependency": false,
+  "phase": "communication-only",
+  "ia_a": {
+    "ok": true,
+    "selector": "default",
+    "response_model": "codestral-latest",
+    "http_status": 200,
+    "latency_s": 2.025,
+    "text": "ACK THOTH-EXT-A-08. A arquitetura mínima viável consiste em:\n\n1. **Banco de Dados Externo**: PostgreSQL com schema para proveniência (timestamp, origem, estado) e tarefas (ID, status, payload).\n2. **Fila de Tarefas**: Redis Streams para enfileirar tarefas com TTL e deduplicação via UUID.\n3. **API de Controle**: Serviço leve (FastAPI) para gerenciar estados, auditando todas as operações via logs estruturados.\n4. **THOTH WEB**: Apenas frontend para visualização (read-only), sem lógica de negócio.\n\n**Falha crítica a testar primeiro**: Condição de corrida na atualização de estados. Simule duas IAs tentando modificar o mesmo estado simultaneamente e verifique se o PostgreSQL bloqueia corretamente ou se há inconsistências.",
+    "usage": {
+      "prompt_tokens": 187,
+      "total_tokens": 379,
+      "completion_tokens": 192,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "service_tier": "standard"
+    }
+  },
+  "ia_b": {
+    "ok": true,
+    "selector": "mistral-Nemo-Instruct-2407",
+    "response_model": "mistral-Nemo-Instruct-2407",
+    "http_status": 200,
+    "latency_s": 15.272,
+    "text": "ACK THOTH-EXT-B-08. Mantendo a arquitetura minimalista, a solução proposta pela IA-A é robusta e escalável. A utilização do Redis Streams para a fila de tarefas é uma boa escolha devido à sua capacidade de processamento em tempo real e sua funcionalidade de TTL e deduplicação via UUID.\n\nNo entanto, eu mudaria a abordagem do banco de dados externo. Em vez de utilizar o PostgreSQL, eu sugeriria o uso do CockroachDB, que é um banco de dados distribuído e tolerante a falhas, projetado para lidar com grandes volumes de dados e transações complexas. Isso proporcionaria uma maior disponibilidade e consistência dos dados, especialmente em situações de alta carga.\n\nPara testar a retomada após a queda do coordenador sem duplicar tarefas, eu proporia o seguinte teste falsificável: após a queda do coordenador, simular a adição de novas tarefas à fila. Em seguida, verificar se o sistema é capaz de processar essas tarefas sem duplicá-las após a retomada do coordenador. Isso pode ser feito monitorando o número de tarefas na fila antes e depois da queda do coordenador, bem como verificando se as tarefas processadas correspondem às tarefas adicionadas à fila.",
+    "usage": {
+      "prompt_tokens": 341,
+      "total_tokens": 619,
+      "completion_tokens": 278,
+      "estimated_cost": 1.4819e-05,
+      "prompt_tokens_details": null
+    }
+  },
+  "ia_c": null,
+  "checks": {
+    "b_received_a_verbatim": true,
+    "a_b_response_models_distinct": true,
+    "c_received_a_and_b_verbatim": false,
+    "three_response_models_distinct": false,
+    "ack_a": true,
+    "ack_b": true,
+    "ack_c": false,
+    "minimum_external_dialogue_proven": true
+  },
+  "attempts": [
+    {
+      "phase": "A",
+      "ok": true,
+      "selector": "default",
+      "response_model": "codestral-latest",
+      "http_status": 200,
+      "latency_s": 2.025
+    },
+    {
+      "phase": "B",
+      "ok": false,
+      "selector": "gemini-3.7-flash",
+      "http_status": 401,
+      "latency_s": 0.186,
+      "error": "{\"error\":{\"message\":\"Missing API key.\",\"type\":\"authentication_error\",\"param\":null,\"code\":\"missing_api_key\"}}"
+    },
+    {
+      "phase": "B",
+      "ok": true,
+      "selector": "mistral-Nemo-Instruct-2407",
+      "response_model": "mistral-Nemo-Instruct-2407",
+      "http_status": 200,
+      "latency_s": 15.272
+    },
+    {
+      "phase": "C",
+      "ok": true,
+      "selector": "default",
+      "response_model": "codestral-latest",
+      "http_status": 200,
+      "latency_s": 1.075
+    },
+    {
+      "phase": "C",
+      "ok": true,
+      "selector": "fast",
+      "response_model": "codestral-latest",
+      "http_status": 200,
+      "latency_s": 0.248
+    },
+    {
+      "phase": "C",
+      "ok": true,
+      "selector": "default",
+      "response_model": "codestral-latest",
+      "http_status": 200,
+      "latency_s": 0.225
+    }
+  ]
+}
