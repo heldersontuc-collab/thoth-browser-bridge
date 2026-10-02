@@ -1,0 +1,227 @@
+name: THOTH Mesa Phase2 Router Verification
+
+on:
+  push:
+    branches:
+      - lab/thoth-mesa-phase2-router
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: thoth_mesa_router_lab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d thoth_mesa_router_lab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: thoth_mesa_router_lab
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: lab/thoth-mesa-phase2-router
+
+      - name: Prepare Supabase-like roles
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role service_role nologin bypassrls;
+          create role anon nologin;
+          create role authenticated nologin;
+          SQL
+
+      - name: Apply core and router schema
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/001_machine_room_core.sql
+          psql -v ON_ERROR_STOP=1 -f lab/thoth-mesa/phase2/002_router_core.sql
+
+      - name: Verify routing health quota budget and cooldown
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_thread uuid;
+            v_task uuid;
+            p1 uuid; p2 uuid; p3 uuid; p4 uuid;
+            m1 uuid; m2 uuid; m3 uuid; m4 uuid;
+            r thoth_mesa.routing_decisions;
+            r2 thoth_mesa.routing_decisions;
+            v_count integer;
+          begin
+            insert into thoth_mesa.threads(mission_key,subject)
+            values('router-proof-001','Router verification')
+            returning id into v_thread;
+
+            insert into thoth_mesa.tasks(thread_id,kind,title,idempotency_key,priority)
+            values(v_thread,'routing','verify routing invariants','router-task-001',10)
+            returning id into v_task;
+
+            insert into thoth_mesa.providers(provider_key,display_name,priority,transport)
+            values
+              ('provider-a','Provider A',10,'gateway'),
+              ('provider-b','Provider B',20,'gateway'),
+              ('provider-c','Provider C',30,'gateway'),
+              ('provider-other','Provider Other',1,'gateway');
+
+            select id into p1 from thoth_mesa.providers where provider_key='provider-a';
+            select id into p2 from thoth_mesa.providers where provider_key='provider-b';
+            select id into p3 from thoth_mesa.providers where provider_key='provider-c';
+            select id into p4 from thoth_mesa.providers where provider_key='provider-other';
+
+            insert into thoth_mesa.models(provider_id,model_key,family,quality_tier)
+            values
+              (p1,'model-a','general',9),
+              (p2,'model-b','general',8),
+              (p3,'model-c','general',7),
+              (p4,'model-other','other',10);
+
+            select id into m1 from thoth_mesa.models where provider_id=p1 and model_key='model-a';
+            select id into m2 from thoth_mesa.models where provider_id=p2 and model_key='model-b';
+            select id into m3 from thoth_mesa.models where provider_id=p3 and model_key='model-c';
+            select id into m4 from thoth_mesa.models where provider_id=p4 and model_key='model-other';
+
+            insert into thoth_mesa.provider_health(provider_id,model_id,state,source)
+            values
+              (p1,m1,'healthy','test'),
+              (p2,m2,'healthy','test'),
+              (p3,m3,'healthy','test'),
+              (p4,m4,'healthy','test');
+
+            r := thoth_mesa.route_next_model(v_thread,v_task,'general','route-001');
+            if r.outcome <> 'selected' or r.selected_model_id <> m1 or r.fallback_index <> 0 then
+              raise exception 'initial route wrong outcome %, model %, fallback %',r.outcome,r.selected_model_id,r.fallback_index;
+            end if;
+
+            insert into thoth_mesa.provider_health(provider_id,model_id,state,retry_after,source)
+            values(p1,m1,'rate_limited',now()+interval '10 minutes','test');
+
+            r := thoth_mesa.route_next_model(v_thread,v_task,'general','route-002');
+            if r.outcome <> 'selected' or r.selected_model_id <> m2 or r.fallback_index <> 1 then
+              raise exception 'rate-limit fallback wrong outcome %, model %, fallback %',r.outcome,r.selected_model_id,r.fallback_index;
+            end if;
+
+            insert into thoth_mesa.provider_health(provider_id,model_id,state,source)
+            values(p2,m2,'quota_exhausted','test');
+
+            r := thoth_mesa.route_next_model(v_thread,v_task,'general','route-003');
+            if r.outcome <> 'selected' or r.selected_model_id <> m3 or r.fallback_index <> 2 then
+              raise exception 'quota fallback wrong outcome %, model %, fallback %',r.outcome,r.selected_model_id,r.fallback_index;
+            end if;
+
+            insert into thoth_mesa.provider_health(provider_id,model_id,state,source)
+            values(p3,m3,'unavailable','test');
+
+            r := thoth_mesa.route_next_model(v_thread,v_task,'general','route-004');
+            if r.outcome <> 'blocked_no_healthy_model' or r.selected_model_id is not null then
+              raise exception 'no-route pause failed outcome %, model %',r.outcome,r.selected_model_id;
+            end if;
+
+            -- Restore one model, then prove budget can block an otherwise healthy route.
+            insert into thoth_mesa.provider_health(provider_id,model_id,state,source)
+            values(p3,m3,'healthy','test');
+
+            insert into thoth_mesa.budget_limits(scope_type,thread_id,task_id,max_cost_usd)
+            values('task',v_thread,v_task,0.02000000);
+
+            insert into thoth_mesa.model_invocations(
+              thread_id,task_id,provider,requested_model,response_model,status,estimated_cost_usd
+            ) values
+              (v_thread,v_task,'provider-c','model-c','model-c','completed',0.01000000),
+              (v_thread,v_task,'provider-c','model-c','model-c','completed',0.01000000);
+
+            r := thoth_mesa.route_next_model(v_thread,v_task,'general','route-005');
+            if r.outcome <> 'blocked_budget_exhausted' or r.selected_model_id is not null then
+              raise exception 'budget block failed outcome %, model %',r.outcome,r.selected_model_id;
+            end if;
+
+            r2 := thoth_mesa.route_next_model(v_thread,v_task,'general','route-005');
+            if r2.id <> r.id then
+              raise exception 'routing decision idempotency returned different rows';
+            end if;
+
+            select count(*) into v_count
+            from thoth_mesa.routing_decisions
+            where decision_key='route-005';
+
+            if v_count <> 1 then
+              raise exception 'routing decision idempotency created % rows',v_count;
+            end if;
+
+            -- Disable budget and prove an expired cooldown makes provider A eligible again.
+            update thoth_mesa.budget_limits set enabled=false where task_id=v_task;
+
+            insert into thoth_mesa.provider_health(provider_id,model_id,state,retry_after,source)
+            values(p1,m1,'rate_limited',now()-interval '1 second','test');
+
+            r := thoth_mesa.route_next_model(v_thread,v_task,'general','route-006');
+            if r.outcome <> 'selected' or r.selected_model_id <> m1 or r.fallback_index <> 0 then
+              raise exception 'expired cooldown recovery wrong outcome %, model %, fallback %',r.outcome,r.selected_model_id,r.fallback_index;
+            end if;
+
+            -- Family pinning must ignore a higher-priority model from another family.
+            r := thoth_mesa.route_next_model(v_thread,v_task,'other','route-007');
+            if r.outcome <> 'selected' or r.selected_model_id <> m4 then
+              raise exception 'family pinning failed outcome %, model %',r.outcome,r.selected_model_id;
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Emit router proof
+        shell: bash
+        run: |
+          mkdir -p lab/thoth-mesa/phase2
+          python - <<'PY'
+          import json,datetime,pathlib
+          proof={
+            "proof_id":"THOTH-PHASE2-ROUTER-001",
+            "verified_at_utc":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "checks":{
+              "healthy_primary_selected":True,
+              "rate_limited_primary_falls_back":True,
+              "fallback_index_records_skipped_preference":True,
+              "quota_exhausted_model_skipped":True,
+              "all_unhealthy_blocks_instead_of_faking":True,
+              "budget_exhaustion_blocks_route":True,
+              "routing_decision_idempotent":True,
+              "expired_cooldown_reenables_model":True,
+              "family_pinning_respected":True
+            },
+            "thoth_web_dependency":False,
+            "vps_dependency":False,
+            "thoth_code_touched":False
+          }
+          pathlib.Path("lab/thoth-mesa/phase2/PROOF-ROUTER-001.json").write_text(
+            json.dumps(proof,ensure_ascii=False,indent=2),encoding="utf-8"
+          )
+          print(json.dumps(proof,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Persist proof
+        shell: bash
+        run: |
+          git config user.name "THOTH Mesa Phase2 Lab"
+          git config user.email "thoth-mesa-phase2@users.noreply.github.com"
+          git add lab/thoth-mesa/phase2/PROOF-ROUTER-001.json
+          git commit -m "lab: persist phase2 router proof"
+          git push origin HEAD:lab/thoth-mesa-phase2-router
