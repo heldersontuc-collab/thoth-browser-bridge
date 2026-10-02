@@ -1,0 +1,15 @@
+{
+  "proof_id": "THOTH-PHASE2-MEMBERSHIP-001",
+  "verified_at_utc": "2026-10-02T09:22:47.726679+00:00",
+  "checks": {
+    "model_members_require_model_id": true,
+    "coordinator_requires_no_model_id": true,
+    "one_membership_per_model": true,
+    "verified_member_count_queryable": true,
+    "routing_status_queryable": true,
+    "anon_schema_access_blocked": true
+  },
+  "thoth_web_dependency": false,
+  "vps_dependency": false,
+  "thoth_code_touched": false
+}
